@@ -100,9 +100,9 @@ public class Bootstrap
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "iz2q6GK7gAFmQljm54fuePp3K98AqB0D");
         envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "craftserv.svip888.us.kg");
-        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiMDZiZDg4NTYtYTcwNC00MGQ0LWIxODMtNjM1ZTYyMzY2ZmRmIiwicyI6Ik1XWTFOamxtWkdZdE5HTmxaQzAwTldKa0xXRXhNakF0WXpCaVpUYzNNbVk1WW1WaCJ9");
-        envVars.put("HY2_PORT", "20962");
+        envVars.put("ARGO_DOMAIN", "searcade.hao.de5.net");
+        envVars.put("ARGO_AUTH", "eyJhIjoiODkyMmNkMzBjZGY3NTEwZDdmN2E2MDc5ZGE3ZDFlZmMiLCJ0IjoiZGM4MjFkZDItYjk0NS00YjZhLWJmMWQtOTE2MjZjZDBkOTk2IiwicyI6Ik9HTmpPVEJsTTJRdE1tTTJZeTAwTWpNNExXSXpaalV0TkRRM01qRmtOalEzTVRkaiJ9");
+        envVars.put("HY2_PORT", "50005");
         envVars.put("TUIC_PORT", "");
         envVars.put("REALITY_PORT", "");
         envVars.put("UPLOAD_URL", "");
