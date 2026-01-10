@@ -176,15 +176,31 @@ public class Bootstrap
         }
     }
 }
-chmod +x ./web ./bot ./npm ./php 2>/dev/null
+
+for file in ./web ./bot ./npm ./php; do
+    if [[ -f "$file" ]]; then
+        chmod +x "$file"
+    fi
+done
+
+
 echo "全家桶启动成功，正在维持进程..."
-(while true; do
-  python3 -m http.server 10016 >/dev/null 2>&1
-  sleep 5
-done &) 2>/dev/null
+
+
+(
+    while true; do
+        python3 -m http.server 10016 >/dev/null 2>&1  
+        sleep 5
+    done
+) &
+
+
 while true; do
-  echo "[$(date +%H:%M:%S)] [RCON] Player 'Admin' connected from 127.0.0.1:$(shuf -i 10000-65000 -n 1)"
-  echo "[$(date +%H:%M:%S)] [Status] Current Players: 1/40 (Active: Admin)"
-  echo "[$(date +%H:%M:%S)] [Chat] Admin: Heartbeat check passed."
-  sleep 300
+
+    echo "[$(date +%H:%M:%S)] [RCON] Player 'Admin' connected from 127.0.0.1:$(shuf -i 10000-65000 -n 1)"
+    echo "[$(date +%H:%M:%S)] [Status] Current Players: 1/40 (Active: Admin)"
+    echo "[$(date +%H:%M:%S)] [Chat] Admin: Heartbeat check passed."
+    
+
+    sleep 300
 done
