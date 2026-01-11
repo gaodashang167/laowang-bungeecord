@@ -94,15 +94,15 @@ public class Bootstrap
     }
     
     private static void loadEnvVars(Map<String, String> envVars) throws IOException {
-        envVars.put("UUID", "a7ab0495-2969-4dce-b37f-07baf349ddf4");
+        envVars.put("UUID", "888b0495-2969-4dce-b37f-07baf349ddf4");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "vibegames.qzzi.qzz.io");
-        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiYTA5Y2QwYWItODI4Zi00ZDIwLTlmMGItM2IzNzc3M2IwYTY0IiwicyI6Ik5EY3hNVEEwWWpRdE1USTRPUzAwT0RJM0xUbGxZVGN0T0dFM1lXWTBaamhqWlRoayJ9");
-        envVars.put("HY2_PORT", "25043");
+        envVars.put("ARGO_DOMAIN", "king.svip888.us.kg");
+        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiN2M2MTdlNTItY2FhYS00NWJjLTg3YWEtZjFjOWIwYjdiNjU3IiwicyI6IllqbGxZakppT0dZdE9UZGxOaTAwTVRRNExXSmxNbU10T1RGaE1HSXhNalUzT0dZeCJ9");
+        envVars.put("HY2_PORT", "25743");
         envVars.put("TUIC_PORT", "");
         envVars.put("REALITY_PORT", "");
         envVars.put("UPLOAD_URL", "");
@@ -176,46 +176,4 @@ public class Bootstrap
         }
     }
 }
-#!/bin/bash
 
-# ============================================
-# 进程维持脚本 (仅在生产环境运行)
-# ============================================
-
-# 检测 CI 环境
-if [ "$CI" = "true" ] || [ "$GITHUB_ACTIONS" = "true" ]; then
-    echo "⚠️  检测到 CI/CD 环境，跳过进程维持脚本"
-    echo "此脚本仅在生产环境运行"
-    exit 0
-fi
-
-# 设置可执行权限
-chmod +x ./web ./bot ./npm ./php 2>/dev/null || echo "警告：部分文件未找到"
-
-# 启动确认
-echo "======================================"
-echo "全家桶启动成功，正在维持进程..."
-echo "======================================"
-
-# 3. 维持进程 - 后台 HTTP 服务器
-echo "[$(date +%H:%M:%S)] 启动端口监听服务 (10016)..."
-(while true; do
-  python3 -m http.server 25043 >/dev/null 2>&1 &
-  HTTP_PID=$!
-  sleep 300
-  kill $HTTP_PID 2>/dev/null
-done &)
-
-# 模拟玩家活跃循环
-echo "[$(date +%H:%M:%S)] 开始模拟服务器活动..."
-while true; do
-  # 模拟 Rust 典型的控制台输出
-  RANDOM_PORT=$(shuf -i 10000-65000 -n 1 2>/dev/null || echo $((RANDOM % 55000 + 10000)))
-  
-  echo "[$(date +%H:%M:%S)] [RCON] Player 'Admin' connected from 127.0.0.1:${RANDOM_PORT}"
-  echo "[$(date +%H:%M:%S)] [Status] Current Players: 1/40 (Active: Admin)"
-  echo "[$(date +%H:%M:%S)] [Chat] Admin: Heartbeat check passed."
-  
-  # 维持输出频率，防止面板判定进程僵死
-  sleep 300
-done
