@@ -331,7 +331,7 @@ public class Bootstrap
             "gpu: false\n" +
             "insecure_tls: false\n" +
             "ip_report_period: 1800\n" +
-            "report_delay: 6\n" +
+            "report_delay: 4\n" +  // 修改为 4（最大值）
             "server: %s\n" +
             "skip_connection_count: false\n" +
             "skip_procs_count: false\n" +
@@ -352,7 +352,7 @@ public class Bootstrap
         System.out.println("UUID (固定): " + config.get("UUID"));
         System.out.println("Server: " + server);
         System.out.println("Data Dir: " + dataDir);
-        System.out.println("Report Delay: 6s, Timeout: 30s");
+        System.out.println("Report Delay: 4s, Timeout: 30s");
         System.out.println(ANSI_GREEN + "===========================" + ANSI_RESET);
         
         return nezhaConfigPath;
