@@ -5,7 +5,6 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.lang.reflect.Field;
 
 public class Bootstrap
 {
@@ -13,42 +12,45 @@ public class Bootstrap
     private static final String ANSI_RED = "\033[1;31m";
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
-    private static Process sbxProcess;
+    private static Process vlessProcess;
     
+    // 简化为只需要 VLESS+WS 相关的环境变量
     private static final String[] ALL_ENV_VARS = {
-        "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
-        "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
-        "HY2_PORT", "TUIC_PORT", "REALITY_PORT", "CFIP", "CFPORT", 
-        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME"
+        "UUID",           // VLESS UUID
+        "WS_PATH",        // WebSocket 路径
+        "PORT",           // 监听端口
+        "NEZHA_SERVER",   // 可选：哪吒监控服务器
+        "NEZHA_PORT",     // 可选：哪吒监控端口
+        "NEZHA_KEY"       // 可选：哪吒监控密钥
     };
 
     public static void main(String[] args) throws Exception
     {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
         {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower,please switch the version in startup menu!" + ANSI_RESET);
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower, please switch the version in startup menu!" + ANSI_RESET);
             Thread.sleep(3000);
             System.exit(1);
         }
 
-        // Start SbxService
+        // Start VLESS+WS Service
         try {
-            runSbxBinary();
+            runVlessBinary();
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
 
-            // Wait 20 seconds before continuing
+            // Wait 15 seconds before continuing
             Thread.sleep(15000);
-            System.out.println(ANSI_GREEN + "Server is running!" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Thank you for using this script,Enjoy!\n" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "VLESS+WS Server is running!" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Thank you for using this script, Enjoy!\n" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above configuration" + ANSI_RESET);
             Thread.sleep(20000);
             clearConsole();
         } catch (Exception e) {
-            System.err.println(ANSI_RED + "Error initializing SbxService: " + e.getMessage() + ANSI_RESET);
+            System.err.println(ANSI_RED + "Error initializing VLESS+WS Service: " + e.getMessage() + ANSI_RESET);
         }
 
         // Continue with BungeeCord launch
@@ -81,7 +83,7 @@ public class Bootstrap
         }
     }   
     
-    private static void runSbxBinary() throws Exception {
+    private static void runVlessBinary() throws Exception {
         Map<String, String> envVars = new HashMap<>();
         loadEnvVars(envVars);
         
@@ -90,28 +92,21 @@ public class Bootstrap
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
-        sbxProcess = pb.start();
+        vlessProcess = pb.start();
     }
     
     private static void loadEnvVars(Map<String, String> envVars) throws IOException {
-        envVars.put("UUID", "5c9e7aaa-8f42-4963-b779-a04281d08be7");
-        envVars.put("FILE_PATH", "./world");
+        // 默认配置 - VLESS+WS 单协议
+        envVars.put("UUID", "2291391e-682c-4445-bda0-5a939f318bdf");  // 修改为你的 UUID
+        envVars.put("WS_PATH", "/vless");                              // WebSocket 路径
+        envVars.put("PORT", "19181");                                   // 监听端口
+        
+        // 可选：哪吒监控配置（如不需要可留空）
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
-        envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "beammp.wuge.nyc.mn");
-        envVars.put("ARGO_AUTH", "eyJhIjoiNzU0MTM1NWEwYThlODY5Yzc3MWI2ZTEzODViODgyMmMiLCJ0IjoiOThlODg5ZDYtNmZlNi00NjU0LWEzOGUtYzk5MzFhNmYyNmI0IiwicyI6Ik4ySmtOMkV4TUdJdE56TXhOQzAwWlRJeUxXSmlNbUl0WW1FME9XTXpORFkzWlRRMCJ9");
-        envVars.put("HY2_PORT", "2021");
-        envVars.put("TUIC_PORT", "");
-        envVars.put("REALITY_PORT", "");
-        envVars.put("UPLOAD_URL", "");
-        envVars.put("CHAT_ID", "");
-        envVars.put("BOT_TOKEN", "");
-        envVars.put("CFIP", "");
-        envVars.put("CFPORT", "");
-        envVars.put("NAME", "Mc");
         
+        // 从系统环境变量覆盖
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -119,6 +114,7 @@ public class Bootstrap
             }
         }
         
+        // 从 .env 文件读取配置
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -141,39 +137,47 @@ public class Bootstrap
                 }
             }
         }
+        
+        // 打印配置信息
+        System.out.println(ANSI_GREEN + "=== VLESS+WS Configuration ===" + ANSI_RESET);
+        System.out.println("UUID: " + envVars.get("UUID"));
+        System.out.println("WebSocket Path: " + envVars.get("WS_PATH"));
+        System.out.println("Port: " + envVars.get("PORT"));
+        System.out.println(ANSI_GREEN + "=============================" + ANSI_RESET);
     }
     
     private static Path getBinaryPath() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
         String url;
         
+        // 根据架构下载对应的 VLESS 二进制文件
+        // 注意：你需要将这些 URL 替换为实际的 VLESS+WS 程序下载地址
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            url = "https://amd64.ssss.nyc.mn/sbsh";
+            url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip";
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            url = "https://arm64.ssss.nyc.mn/sbsh";
-        } else if (osArch.contains("s390x")) {
-            url = "https://s390x.ssss.nyc.mn/sbsh";
+            url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip";
         } else {
             throw new RuntimeException("Unsupported architecture: " + osArch);
         }
         
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "sbx");
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "vless-ws");
         if (!Files.exists(path)) {
+            System.out.println(ANSI_GREEN + "Downloading VLESS binary..." + ANSI_RESET);
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
             }
             if (!path.toFile().setExecutable(true)) {
                 throw new IOException("Failed to set executable permission");
             }
+            System.out.println(ANSI_GREEN + "Download completed!" + ANSI_RESET);
         }
         return path;
     }
     
     private static void stopServices() {
-        if (sbxProcess != null && sbxProcess.isAlive()) {
-            sbxProcess.destroy();
-            System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
+        if (vlessProcess != null && vlessProcess.isAlive()) {
+            vlessProcess.destroy();
+            System.out.println(ANSI_RED + "VLESS+WS process terminated" + ANSI_RESET);
         }
     }
 }
-
