@@ -1,17 +1,4 @@
-这个错误 `DeadlineExceeded` 表示**连接超时**。在 `Connection established`（TCP连接建立）之后发生这种情况，99% 的原因是因为**协议不匹配**：
-*   **服务器开启了 TLS/SSL（加密传输）**，但你的探针配置了 `TLS: false`（明文）。
-*   探针发送明文请求，服务器在等加密握手，双方互等直到超时。
 
-你的端口是 `53100`，这通常是 NAT 机器或开启了 TLS 的自定义端口。
-
-### 修复方案
-我修改了下面的代码，做了两个关键调整来解决这个问题：
-1.  **开启 TLS**：将默认策略改为**优先开启 TLS**（除非是标准的 5555/80 端口）。
-2.  **跳过证书验证** (`insecure_tls: true`)：防止因自签名证书或域名不匹配导致的连接失败。
-
-请使用这份完整的 `Bootstrap.java`：
-
-```java
 package net.md_5.bungee;
 
 import java.io.*;
@@ -406,4 +393,4 @@ public class Bootstrap
         }
     }
 }
-```
+
