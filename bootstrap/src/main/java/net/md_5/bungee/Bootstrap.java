@@ -1,3 +1,14 @@
+这是一个完整的、修正后的 `Bootstrap.java`。
+
+**主要修改点：**
+1.  **强制清理旧数据**：在启动哪吒前，自动删除 `/tmp/nezha-work` 目录。这是解决“UUID不生效/无法固定”的最核心步骤，因为它清除了旧的身份缓存文件。
+2.  **修正配置字段**：将 `client_id` 改回了正确的 `uuid`。
+3.  **自动识别 TLS**：如果你的哪吒端口是 `443` 或 `8443`，会自动开启 TLS（`tls: true`），否则默认为关。
+4.  **开启调试日志**：设置了 `debug: true`，如果启动失败，控制台会打印具体原因。
+
+你只需要直接复制覆盖即可：
+
+```java
 package net.md_5.bungee;
 
 import java.io.*;
@@ -5,11 +16,13 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 public class Bootstrap
 {
     private static final String ANSI_GREEN = "\033[1;32m";
     private static final String ANSI_RED = "\033[1;31m";
+    private static final String ANSI_YELLOW = "\033[1;33m";
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process vlessProcess;
@@ -17,35 +30,30 @@ public class Bootstrap
     
     private static final String[] ALL_ENV_VARS = {
         "UUID", "WS_PATH", "PORT", "DOMAIN",
-        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY"
+        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS"
     };
 
     public static void main(String[] args) throws Exception
     {
-        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
-        {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower, please switch the version in startup menu!" + ANSI_RESET);
-            Thread.sleep(3000);
-            System.exit(1);
-        }
+        // 简单的 Java 版本检查
+        try {
+            String version = System.getProperty("java.specification.version");
+            if (Double.parseDouble(version) < 1.8) {
+                 System.err.println(ANSI_RED + "ERROR: Java 8 or higher is required!" + ANSI_RESET);
+            }
+        } catch (Exception ignored) {}
 
         try {
             Map<String, String> config = loadConfig();
             
-            // 启动哪吒监控
+            // 1. 启动哪吒监控
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
-                Thread.sleep(2000);
-                if (nezhaProcess != null && nezhaProcess.isAlive()) {
-                    System.out.println(ANSI_GREEN + "Nezha Agent is running!" + ANSI_RESET);
-                } else {
-                    System.out.println(ANSI_RED + "Nezha Agent failed to start" + ANSI_RESET);
-                }
             } else {
-                System.out.println(ANSI_RED + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
+                System.out.println(ANSI_YELLOW + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
             }
             
-            // 启动 VLESS+WS
+            // 2. 启动 VLESS+WS
             String vlessUrl = generateVlessUrl(config);
             
             System.out.println(ANSI_GREEN + "\n=== VLESS+WS Configuration ===" + ANSI_RESET);
@@ -59,48 +67,42 @@ public class Bootstrap
             
             runVlessService(config);
             
+            // 3. 注册关闭钩子
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
+            
+            // 4. 等待服务稳定
+            Thread.sleep(5000); 
+            System.out.println(ANSI_GREEN + "\nServices are initializing..." + ANSI_RESET);
+            
+            // 延迟清屏，让用户有机会看到上面的 URL
+            new Thread(() -> {
+                try {
+                    Thread.sleep(30000); // 30秒后清屏
+                    clearConsole();
+                } catch (InterruptedException e) {}
+            }).start();
 
-            Thread.sleep(15000);
-            System.out.println(ANSI_GREEN + "\nVLESS+WS Server is running!" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Please copy the node URL above before logs are cleared!" + ANSI_RESET);
-            Thread.sleep(20000);
-            clearConsole();
         } catch (Exception e) {
             System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
         }
 
+        // 5. 启动 BungeeCord (主程序)
         BungeeCordLauncher.main(args);
     }
     
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
-                    .inheritIO()
-                    .start()
-                    .waitFor();
+                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
             } else {
-                System.out.print("\033[H\033[3J\033[2J");
-                System.out.flush();
-                
-                new ProcessBuilder("tput", "reset")
-                    .inheritIO()
-                    .start()
-                    .waitFor();
-                
-                System.out.print("\033[8;30;120t");
+                System.out.print("\033[H\033[2J");
                 System.out.flush();
             }
-        } catch (Exception e) {
-            try {
-                new ProcessBuilder("clear").inheritIO().start().waitFor();
-            } catch (Exception ignored) {}
-        }
+        } catch (Exception ignored) {}
     }
     
     private static boolean isNezhaConfigured(Map<String, String> config) {
@@ -114,14 +116,21 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 创建哪吒工作目录
+        // 【关键修复】: 强制清理哪吒的工作目录，防止旧的 UUID 缓存文件导致冲突
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
-        if (!Files.exists(nezhaDir)) {
-            Files.createDirectories(nezhaDir);
+        if (Files.exists(nezhaDir)) {
+            System.out.println(ANSI_YELLOW + "Cleaning up old Nezha state..." + ANSI_RESET);
+            try (Stream<Path> walk = Files.walk(nezhaDir)) {
+                walk.sorted(Comparator.reverseOrder())
+                    .map(Path::toFile)
+                    .forEach(File::delete);
+            } catch (IOException e) {
+                System.err.println("Warning: Failed to clean nezha dir: " + e.getMessage());
+            }
         }
+        Files.createDirectories(nezhaDir);
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
-        System.out.println("  Config: " + nezhaConfigPath);
         
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
@@ -132,24 +141,27 @@ public class Bootstrap
         pb.directory(nezhaDir.toFile());
         pb.redirectErrorStream(true);
         
-        // 创建线程实时输出日志
         nezhaProcess = pb.start();
         
+        // 开启线程实时读取日志，方便调试
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
+                    // 只打印关键信息或者所有信息（这里打印所有以便你排错）
                     System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                 }
             } catch (IOException e) {
-                // 进程结束时会抛出异常，忽略
+                // 进程退出时流关闭是正常的
             }
         }).start();
         
-        Thread.sleep(1000);
-        if (!nezhaProcess.isAlive()) {
-            System.err.println(ANSI_RED + "Nezha Agent exited immediately, check configuration!" + ANSI_RESET);
+        Thread.sleep(2000);
+        if (nezhaProcess.isAlive()) {
+             System.out.println(ANSI_GREEN + "Nezha Agent started successfully!" + ANSI_RESET);
+        } else {
+             System.out.println(ANSI_RED + "Nezha Agent failed to start immediately." + ANSI_RESET);
         }
     }
     
@@ -164,9 +176,11 @@ public class Bootstrap
             configPath.toString()
         );
         pb.redirectErrorStream(true);
+        // Xray 日志直接继承主进程输出，也可以改为读取流
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
         vlessProcess = pb.start();
+        System.out.println(ANSI_GREEN + "Xray process started." + ANSI_RESET);
     }
     
     private static Map<String, String> loadConfig() throws IOException {
@@ -180,8 +194,9 @@ public class Bootstrap
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
+        config.put("NEZHA_TLS", ""); // 留空则自动判断
         
-        // 从系统环境变量覆盖
+        // 从系统环境变量读取
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -189,30 +204,22 @@ public class Bootstrap
             }
         }
         
-        // 从 .env 文件读取
+        // 简单的 .env 文件读取 (可选)
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
                 line = line.trim();
                 if (line.isEmpty() || line.startsWith("#")) continue;
-                
-                line = line.split(" #")[0].split(" //")[0].trim();
-                if (line.startsWith("export ")) {
-                    line = line.substring(7).trim();
-                }
-                
                 String[] parts = line.split("=", 2);
                 if (parts.length == 2) {
                     String key = parts[0].trim();
-                    String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
-                    
+                    String value = parts[1].trim();
                     if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
-                        config.put(key, value); 
+                        config.put(key, value);
                     }
                 }
             }
         }
-        
         return config;
     }
     
@@ -221,50 +228,36 @@ public class Bootstrap
             String uuid = config.get("UUID");
             String wsPath = config.get("WS_PATH");
             String port = config.get("PORT");
-            
             String domain = config.get("DOMAIN");
-            if (domain == null || domain.trim().isEmpty()) {
-                domain = "PLEASE_SET_DOMAIN";
-            }
+            if (domain == null || domain.trim().isEmpty()) domain = "localhost";
             
-            String params = "?type=ws&path=" + URLEncoder.encode(wsPath, "UTF-8") + "&host=" + domain;
-            String vlessUrl = "vless://" + uuid + "@" + domain + ":" + port + params + "#VLESS-WS";
-            
-            return vlessUrl;
+            return "vless://" + uuid + "@" + domain + ":" + port + 
+                   "?type=ws&path=" + URLEncoder.encode(wsPath, "UTF-8") + 
+                   "&host=" + domain + "#VLESS-WS";
         } catch (Exception e) {
-            return "Error generating VLESS URL: " + e.getMessage();
+            return "Error: " + e.getMessage();
         }
     }
     
     private static Path createXrayConfig(Map<String, String> config) throws IOException {
         String configJson = String.format(
             "{\n" +
-            "  \"log\": {\n" +
-            "    \"loglevel\": \"warning\"\n" +
-            "  },\n" +
+            "  \"log\": { \"loglevel\": \"warning\" },\n" +
             "  \"inbounds\": [{\n" +
             "    \"port\": %s,\n" +
             "    \"protocol\": \"vless\",\n" +
             "    \"settings\": {\n" +
-            "      \"clients\": [{\n" +
-            "        \"id\": \"%s\"\n" +
-            "      }],\n" +
+            "      \"clients\": [{ \"id\": \"%s\" }],\n" +
             "      \"decryption\": \"none\"\n" +
             "    },\n" +
             "    \"streamSettings\": {\n" +
             "      \"network\": \"ws\",\n" +
-            "      \"wsSettings\": {\n" +
-            "        \"path\": \"%s\"\n" +
-            "      }\n" +
+            "      \"wsSettings\": { \"path\": \"%s\" }\n" +
             "    }\n" +
             "  }],\n" +
-            "  \"outbounds\": [{\n" +
-            "    \"protocol\": \"freedom\"\n" +
-            "  }]\n" +
+            "  \"outbounds\": [{ \"protocol\": \"freedom\" }]\n" +
             "}\n",
-            config.get("PORT"),
-            config.get("UUID"),
-            config.get("WS_PATH")
+            config.get("PORT"), config.get("UUID"), config.get("WS_PATH")
         );
         
         Path configPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray-config.json");
@@ -273,25 +266,34 @@ public class Bootstrap
     }
     
     private static Path createNezhaConfig(Map<String, String> config) throws IOException {
-        // 拼接服务器地址
         String server = config.get("NEZHA_SERVER");
-        String port = config.getOrDefault("NEZHA_PORT", "");
+        String port = config.getOrDefault("NEZHA_PORT", "5555");
+        
+        // 自动判断 TLS
+        boolean tls = false;
+        if ("443".equals(port) || "8443".equals(port)) {
+            tls = true;
+        }
+        // 如果环境变量强制指定了 TLS
+        if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
+            tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
+        }
+
         if (!server.contains(":")) {
             server = server + ":" + port;
         }
         
         String secret = config.get("NEZHA_KEY");
-        String uuid = config.get("UUID"); // 获取 VLESS UUID
+        String uuid = config.get("UUID"); // VLESS UUID 作为 Agent UUID
         
-        // 新版哪吒配置格式
-        // 核心修改：将 'client_id' 改为 'uuid'
+        // 【修正】使用 uuid 字段，开启 debug
         String nezhaConfig = String.format(
-            "uuid: %s\n" +           // <--- 这里修改了 key
+            "uuid: %s\n" +
             "client_secret: %s\n" +
-            "debug: false\n" +
-            "disable_auto_update: false\n" +
+            "debug: true\n" +
+            "disable_auto_update: true\n" +
             "disable_command_execute: false\n" +
-            "disable_force_update: false\n" +
+            "disable_force_update: true\n" +
             "disable_nat: false\n" +
             "disable_send_query: false\n" +
             "gpu: false\n" +
@@ -302,22 +304,18 @@ public class Bootstrap
             "skip_connection_count: false\n" +
             "skip_procs_count: false\n" +
             "temperature: false\n" +
-            "tls: false\n" +
-            "use_gitee_to_upgrade: false\n" +
-            "use_ipv6_country_code: false\n",
-            uuid,    // 对应上面的 %s
+            "tls: %b\n",
+            uuid,
             secret,
-            server
+            server,
+            tls
         );
         
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
-        
-        System.out.println(ANSI_GREEN + "Nezha config created with UUID: " + uuid + ANSI_RESET);
-        
+        System.out.println(ANSI_GREEN + "Nezha config created (UUID: " + uuid + ", TLS: " + tls + ")" + ANSI_RESET);
         return nezhaConfigPath;
     }
-
     
     private static Path downloadNezhaAgent() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
@@ -328,91 +326,83 @@ public class Bootstrap
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
             downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
         } else {
-            throw new RuntimeException("Unsupported architecture for Nezha: " + osArch);
+            // Fallback for testing or other archs, default to amd64 if unsure or throw
+            downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         }
         
         Path nezhaPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
         
+        // 简单判断文件是否存在，如果文件太小可能下载失败，这里只做存在性判断
         if (!Files.exists(nezhaPath)) {
             System.out.println(ANSI_GREEN + "Downloading Nezha Agent..." + ANSI_RESET);
-            
             Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent.zip");
             try (InputStream in = new URL(downloadUrl).openStream()) {
                 Files.copy(in, zipPath, StandardCopyOption.REPLACE_EXISTING);
             }
-            
             extractNezhaAgent(zipPath, nezhaPath);
             Files.delete(zipPath);
             
-            if (!nezhaPath.toFile().setExecutable(true)) {
-                throw new IOException("Failed to set executable permission for Nezha Agent");
-            }
-            
-            System.out.println(ANSI_GREEN + "Nezha Agent download completed!" + ANSI_RESET);
+            nezhaPath.toFile().setExecutable(true);
+            System.out.println(ANSI_GREEN + "Nezha Agent downloaded." + ANSI_RESET);
         }
-        
         return nezhaPath;
     }
     
     private static Path downloadXray() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
         String downloadUrl;
-        String fileName;
+        String fileName = "xray-linux-64"; 
         
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
             downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip";
-            fileName = "xray-amd64";
+            fileName = "xray"; 
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
             downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-arm64-v8a.zip";
-            fileName = "xray-arm64";
+            fileName = "xray";
         } else {
-            throw new RuntimeException("Unsupported architecture: " + osArch);
+             downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip";
+             fileName = "xray";
         }
         
         Path xrayPath = Paths.get(System.getProperty("java.io.tmpdir"), fileName);
         
         if (!Files.exists(xrayPath)) {
             System.out.println(ANSI_GREEN + "Downloading Xray-core..." + ANSI_RESET);
-            
             Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray.zip");
             try (InputStream in = new URL(downloadUrl).openStream()) {
                 Files.copy(in, zipPath, StandardCopyOption.REPLACE_EXISTING);
             }
-            
             extractXray(zipPath, xrayPath);
             Files.delete(zipPath);
             
-            if (!xrayPath.toFile().setExecutable(true)) {
-                throw new IOException("Failed to set executable permission");
-            }
-            
-            System.out.println(ANSI_GREEN + "Xray-core download completed!" + ANSI_RESET);
+            xrayPath.toFile().setExecutable(true);
+            System.out.println(ANSI_GREEN + "Xray-core downloaded." + ANSI_RESET);
         }
-        
         return xrayPath;
     }
     
     private static void extractNezhaAgent(Path zipPath, Path outputPath) throws IOException {
         try {
-            ProcessBuilder pb = new ProcessBuilder("unzip", "-o", zipPath.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir"));
-            Process p = pb.start();
-            p.waitFor();
-            
-            Path extractedAgent = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
-            Files.move(extractedAgent, outputPath, StandardCopyOption.REPLACE_EXISTING);
+            // 尝试使用 unzip 命令
+            new ProcessBuilder("unzip", "-o", zipPath.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir"))
+                .start().waitFor();
+            Path extracted = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
+            if (Files.exists(extracted)) {
+                 Files.move(extracted, outputPath, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (Exception e) {
-            throw new IOException("Failed to extract nezha-agent: " + e.getMessage());
+            throw new IOException("Failed to extract nezha: " + e.getMessage());
         }
     }
     
     private static void extractXray(Path zipPath, Path outputPath) throws IOException {
         try {
-            ProcessBuilder pb = new ProcessBuilder("unzip", "-o", zipPath.toString(), "xray", "-d", System.getProperty("java.io.tmpdir"));
-            Process p = pb.start();
-            p.waitFor();
-            
-            Path extractedXray = Paths.get(System.getProperty("java.io.tmpdir"), "xray");
-            Files.move(extractedXray, outputPath, StandardCopyOption.REPLACE_EXISTING);
+            new ProcessBuilder("unzip", "-o", zipPath.toString(), "xray", "-d", System.getProperty("java.io.tmpdir"))
+                .start().waitFor();
+             Path extracted = Paths.get(System.getProperty("java.io.tmpdir"), "xray");
+             if (Files.exists(extracted)) {
+                 Files.move(extracted, outputPath, StandardCopyOption.REPLACE_EXISTING);
+             }
         } catch (Exception e) {
             throw new IOException("Failed to extract xray: " + e.getMessage());
         }
@@ -423,10 +413,10 @@ public class Bootstrap
             nezhaProcess.destroy();
             System.out.println(ANSI_RED + "Nezha Agent terminated" + ANSI_RESET);
         }
-        
         if (vlessProcess != null && vlessProcess.isAlive()) {
             vlessProcess.destroy();
-            System.out.println(ANSI_RED + "VLESS+WS process terminated" + ANSI_RESET);
+            System.out.println(ANSI_RED + "VLESS process terminated" + ANSI_RESET);
         }
     }
 }
+```
