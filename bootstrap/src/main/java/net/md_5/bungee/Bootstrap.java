@@ -113,23 +113,47 @@ public class Bootstrap
     private static void runNezhaAgent(Map<String, String> config) throws Exception {
         Path nezhaPath = downloadNezhaAgent();
         
-        // 创建哪吒数据目录 - 使用固定路径保持 UUID
-        Path nezhaDataDir = Paths.get(System.getProperty("user.home"), ".nezha-agent");
-        if (!Files.exists(nezhaDataDir)) {
+        // 哪吒默认数据目录是 /opt/nezha/agent，但容器中可能没权限
+        // 尝试在当前目录和 home 目录创建
+        Path[] possibleDirs = {
+            Paths.get("/opt/nezha/agent"),
+            Paths.get(System.getProperty("user.home"), ".nezha-agent"),
+            Paths.get("./nezha-data")
+        };
+        
+        Path nezhaDataDir = null;
+        for (Path dir : possibleDirs) {
+            try {
+                if (!Files.exists(dir)) {
+                    Files.createDirectories(dir);
+                }
+                // 测试写权限
+                Path testFile = dir.resolve(".test");
+                Files.write(testFile, "test".getBytes());
+                Files.delete(testFile);
+                nezhaDataDir = dir;
+                break;
+            } catch (Exception e) {
+                // 没有权限，尝试下一个
+            }
+        }
+        
+        if (nezhaDataDir == null) {
+            nezhaDataDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
             Files.createDirectories(nezhaDataDir);
         }
+        
+        // 在配置文件中指定数据目录
+        Path nezhaConfigPath = createNezhaConfig(config, nezhaDataDir);
         
         // 创建 agent.db 文件来固定 UUID
         Path agentDbPath = nezhaDataDir.resolve("agent.db");
         if (!Files.exists(agentDbPath)) {
-            // 写入固定的 UUID
             String uuid = config.get("UUID");
             String dbContent = String.format("{\"uuid\":\"%s\"}", uuid);
             Files.write(agentDbPath, dbContent.getBytes());
             System.out.println(ANSI_GREEN + "Created agent.db with UUID: " + uuid + ANSI_RESET);
         }
-        
-        Path nezhaConfigPath = createNezhaConfig(config);
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         System.out.println("  Config: " + nezhaConfigPath);
@@ -139,10 +163,9 @@ public class Bootstrap
         command.add(nezhaPath.toString());
         command.add("-c");
         command.add(nezhaConfigPath.toString());
-        command.add("-d");  // 指定数据目录
-        command.add(nezhaDataDir.toString());
         
         ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(nezhaDataDir.toFile());  // 在数据目录中运行
         pb.redirectErrorStream(true);
         
         // 创建线程实时输出日志
@@ -285,7 +308,7 @@ public class Bootstrap
         return configPath;
     }
     
-    private static Path createNezhaConfig(Map<String, String> config) throws IOException {
+    private static Path createNezhaConfig(Map<String, String> config, Path dataDir) throws IOException {
         // 拼接服务器地址
         String server = config.get("NEZHA_SERVER");
         String port = config.getOrDefault("NEZHA_PORT", "5555");
@@ -294,12 +317,11 @@ public class Bootstrap
         }
         
         String secret = config.get("NEZHA_KEY");
-        String clientId = config.get("UUID"); // 使用 VLESS UUID 作为固定的 client ID
         
-        // 哪吒配置 - 增加延迟和超时时间
+        // 哪吒配置 - 在配置中指定数据目录
         String nezhaConfig = String.format(
-            "client_id: %s\n" +
             "client_secret: %s\n" +
+            "data_dir: %s\n" +  // 在配置文件中指定数据目录
             "debug: true\n" +
             "disable_auto_update: true\n" +
             "disable_command_execute: false\n" +
@@ -309,17 +331,17 @@ public class Bootstrap
             "gpu: false\n" +
             "insecure_tls: false\n" +
             "ip_report_period: 1800\n" +
-            "report_delay: 6\n" +  // 增加到 6 秒
+            "report_delay: 6\n" +
             "server: %s\n" +
             "skip_connection_count: false\n" +
             "skip_procs_count: false\n" +
             "temperature: false\n" +
             "tls: false\n" +
-            "timeout: 30\n" +  // 添加 30 秒超时
+            "timeout: 30\n" +
             "use_gitee_to_upgrade: false\n" +
             "use_ipv6_country_code: false\n",
-            clientId,
             secret,
+            dataDir.toString(),
             server
         );
         
@@ -327,8 +349,9 @@ public class Bootstrap
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
         
         System.out.println(ANSI_GREEN + "=== Nezha Configuration ===" + ANSI_RESET);
-        System.out.println("Client ID (固定): " + clientId);
+        System.out.println("UUID (固定): " + config.get("UUID"));
         System.out.println("Server: " + server);
+        System.out.println("Data Dir: " + dataDir);
         System.out.println("Report Delay: 6s, Timeout: 30s");
         System.out.println(ANSI_GREEN + "===========================" + ANSI_RESET);
         
