@@ -35,8 +35,12 @@ public class Bootstrap
             // 启动哪吒监控
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
-                Thread.sleep(3000);
-                System.out.println(ANSI_GREEN + "Nezha Agent started successfully!" + ANSI_RESET);
+                Thread.sleep(2000);
+                if (nezhaProcess != null && nezhaProcess.isAlive()) {
+                    System.out.println(ANSI_GREEN + "Nezha Agent is running!" + ANSI_RESET);
+                } else {
+                    System.out.println(ANSI_RED + "Nezha Agent failed to start - check configuration" + ANSI_RESET);
+                }
             } else {
                 System.out.println(ANSI_RED + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
             }
@@ -109,6 +113,10 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
+        System.out.println(ANSI_GREEN + "Starting Nezha Agent with config:" + ANSI_RESET);
+        System.out.println("  Server: " + config.get("NEZHA_SERVER"));
+        System.out.println("  Config file: " + nezhaConfigPath);
+        
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
         command.add("-c");
@@ -116,9 +124,27 @@ public class Bootstrap
         
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
+        // 创建一个线程来实时输出哪吒日志
         nezhaProcess = pb.start();
+        
+        new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(nezhaProcess.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
+                }
+            } catch (IOException e) {
+                System.err.println(ANSI_RED + "Error reading Nezha output: " + e.getMessage() + ANSI_RESET);
+            }
+        }).start();
+        
+        // 等待一下确保进程启动
+        Thread.sleep(1000);
+        if (!nezhaProcess.isAlive()) {
+            System.err.println(ANSI_RED + "Nezha Agent failed to start!" + ANSI_RESET);
+        }
     }
     
     private static void runVlessService(Map<String, String> config) throws Exception {
@@ -143,8 +169,8 @@ public class Bootstrap
         // 默认配置
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
-        config.put("PORT", "19181");
-        config.put("DOMAIN", "shx-1.sherixx.xyz");  // 需要手动设置
+        config.put("PORT", "19173");
+        config.put("DOMAIN", "http://shx-1.sherixx.xyz/");  // 需要手动设置
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -250,9 +276,13 @@ public class Bootstrap
     }
     
     private static Path createNezhaConfig(Map<String, String> config) throws IOException {
+        // 使用节点的 UUID 作为哪吒的 UUID，这样每次重启都是同一个探针
+        String uuid = config.get("UUID");
+        
+        // 新版哪吒配置格式
         String nezhaConfig = String.format(
             "client_secret: %s\n" +
-            "debug: false\n" +
+            "debug: true\n" +  // 开启调试模式
             "disable_auto_update: false\n" +
             "disable_command_execute: false\n" +
             "disable_force_update: false\n" +
@@ -269,13 +299,20 @@ public class Bootstrap
             "tls: false\n" +
             "use_gitee_to_upgrade: false\n" +
             "use_ipv6_country_code: false\n" +
-            "uuid: \"\"\n",
+            "uuid: \"%s\"\n",  // 使用节点 UUID 作为哪吒 UUID
             config.get("NEZHA_KEY"),
-            config.get("NEZHA_SERVER")
+            config.get("NEZHA_SERVER"),
+            uuid
         );
         
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
+        
+        System.out.println(ANSI_GREEN + "Nezha config created at: " + nezhaConfigPath + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Using UUID: " + uuid + " (same as VLESS)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Config content:" + ANSI_RESET);
+        System.out.println(nezhaConfig);
+        
         return nezhaConfigPath;
     }
     
