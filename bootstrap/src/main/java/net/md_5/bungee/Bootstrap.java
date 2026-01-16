@@ -355,7 +355,7 @@ public class Bootstrap
             extractXray(zipPath, xrayPath);
             Files.delete(zipPath);
             
-            if (!path.toFile().setExecutable(true)) {
+            if (!xrayPath.toFile().setExecutable(true)) {
                 throw new IOException("Failed to set executable permission");
             }
             
