@@ -39,7 +39,7 @@ public class Bootstrap
                 if (nezhaProcess != null && nezhaProcess.isAlive()) {
                     System.out.println(ANSI_GREEN + "Nezha Agent is running!" + ANSI_RESET);
                 } else {
-                    System.out.println(ANSI_RED + "Nezha Agent failed to start - check configuration" + ANSI_RESET);
+                    System.out.println(ANSI_RED + "Nezha Agent failed to start" + ANSI_RESET);
                 }
             } else {
                 System.out.println(ANSI_RED + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
@@ -52,6 +52,7 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "UUID: " + config.get("UUID") + ANSI_RESET);
             System.out.println(ANSI_GREEN + "WebSocket Path: " + config.get("WS_PATH") + ANSI_RESET);
             System.out.println(ANSI_GREEN + "Port: " + config.get("PORT") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Domain: " + config.get("DOMAIN") + ANSI_RESET);
             System.out.println(ANSI_GREEN + "\n=== VLESS Node URL ===" + ANSI_RESET);
             System.out.println(ANSI_GREEN + vlessUrl + ANSI_RESET);
             System.out.println(ANSI_GREEN + "=============================" + ANSI_RESET);
@@ -111,21 +112,47 @@ public class Bootstrap
     
     private static void runNezhaAgent(Map<String, String> config) throws Exception {
         Path nezhaPath = downloadNezhaAgent();
-        Path nezhaConfigPath = createNezhaConfig(config);
         
-        System.out.println(ANSI_GREEN + "Starting Nezha Agent with config:" + ANSI_RESET);
-        System.out.println("  Server: " + config.get("NEZHA_SERVER"));
-        System.out.println("  Config file: " + nezhaConfigPath);
+        // 创建哪吒工作目录
+        Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
+        if (!Files.exists(nezhaDir)) {
+            Files.createDirectories(nezhaDir);
+        }
+        
+        // 拼接服务器地址
+        String server = config.get("NEZHA_SERVER");
+        String port = config.getOrDefault("NEZHA_PORT", "5555");
+        if (!server.contains(":")) {
+            server = server + ":" + port;
+        }
+        
+        String secret = config.get("NEZHA_KEY");
+        String clientId = config.get("UUID"); // 使用 UUID 作为固定的 client ID
+        
+        System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
+        System.out.println("  Server: " + server);
+        System.out.println("  Client ID: " + clientId);
         
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
-        command.add("-c");
-        command.add(nezhaConfigPath.toString());
+        command.add("-s");
+        command.add(server);
+        command.add("-p");
+        command.add(secret);
+        
+        // 设置固定的 client ID
+        if (clientId != null && !clientId.trim().isEmpty()) {
+            command.add("--report-delay");
+            command.add("3");
+            command.add("--uuid");
+            command.add(clientId);
+        }
         
         ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(nezhaDir.toFile());
         pb.redirectErrorStream(true);
         
-        // 创建一个线程来实时输出哪吒日志
+        // 创建线程实时输出日志
         nezhaProcess = pb.start();
         
         new Thread(() -> {
@@ -136,14 +163,13 @@ public class Bootstrap
                     System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                 }
             } catch (IOException e) {
-                System.err.println(ANSI_RED + "Error reading Nezha output: " + e.getMessage() + ANSI_RESET);
+                // 进程结束时会抛出异常，忽略
             }
         }).start();
         
-        // 等待一下确保进程启动
         Thread.sleep(1000);
         if (!nezhaProcess.isAlive()) {
-            System.err.println(ANSI_RED + "Nezha Agent failed to start!" + ANSI_RESET);
+            System.err.println(ANSI_RED + "Nezha Agent exited immediately, check configuration!" + ANSI_RESET);
         }
     }
     
@@ -170,7 +196,7 @@ public class Bootstrap
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19173");
-        config.put("DOMAIN", "shx-1.sherixx.xyz");  // 需要手动设置
+        config.put("DOMAIN", "shx-1.sherixx.xyz");
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -216,16 +242,7 @@ public class Bootstrap
             String wsPath = config.get("WS_PATH");
             String port = config.get("PORT");
             
-            // 优先使用 DOMAIN 环境变量
             String domain = config.get("DOMAIN");
-            if (domain == null || domain.trim().isEmpty()) {
-                // 尝试从其他环境变量获取
-                domain = System.getenv("SERVER_IP");
-                if (domain == null || domain.trim().isEmpty()) {
-                    domain = System.getenv("PUBLIC_IP");
-                }
-            }
-            
             if (domain == null || domain.trim().isEmpty()) {
                 domain = "PLEASE_SET_DOMAIN";
             }
@@ -273,47 +290,6 @@ public class Bootstrap
         Path configPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray-config.json");
         Files.write(configPath, configJson.getBytes());
         return configPath;
-    }
-    
-    private static Path createNezhaConfig(Map<String, String> config) throws IOException {
-        // 使用节点的 UUID 作为哪吒的 UUID，这样每次重启都是同一个探针
-        String uuid = config.get("UUID");
-        
-        // 新版哪吒配置格式 - 使用 client_id 而不是 uuid
-        String nezhaConfig = String.format(
-            "client_id: %s\n" +  // 使用 client_id 来固定设备 ID
-            "client_secret: %s\n" +
-            "debug: true\n" +
-            "disable_auto_update: false\n" +
-            "disable_command_execute: false\n" +
-            "disable_force_update: false\n" +
-            "disable_nat: false\n" +
-            "disable_send_query: false\n" +
-            "gpu: false\n" +
-            "insecure_tls: false\n" +
-            "ip_report_period: 1800\n" +
-            "report_delay: 3\n" +  // 增加延迟避免超时
-            "server: %s\n" +
-            "skip_connection_count: false\n" +
-            "skip_procs_count: false\n" +
-            "temperature: false\n" +
-            "tls: false\n" +
-            "use_gitee_to_upgrade: false\n" +
-            "use_ipv6_country_code: false\n",
-            uuid,  // client_id 使用节点 UUID
-            config.get("NEZHA_KEY"),
-            config.get("NEZHA_SERVER")
-        );
-        
-        Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
-        Files.write(nezhaConfigPath, nezhaConfig.getBytes());
-        
-        System.out.println(ANSI_GREEN + "Nezha config created at: " + nezhaConfigPath + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "Using client_id: " + uuid + " (same as VLESS UUID)" + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "Config content:" + ANSI_RESET);
-        System.out.println(nezhaConfig);
-        
-        return nezhaConfigPath;
     }
     
     private static Path downloadNezhaAgent() throws IOException {
@@ -379,7 +355,7 @@ public class Bootstrap
             extractXray(zipPath, xrayPath);
             Files.delete(zipPath);
             
-            if (!xrayPath.toFile().setExecutable(true)) {
+            if (!path.toFile().setExecutable(true)) {
                 throw new IOException("Failed to set executable permission");
             }
             
