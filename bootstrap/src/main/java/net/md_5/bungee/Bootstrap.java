@@ -27,7 +27,7 @@ public class Bootstrap
         try {
             Map<String, String> config = loadConfig();
             
-            // 1. 启动哪吒 (移除导致崩溃的命令行参数)
+            // 1. 启动哪吒
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             }
@@ -92,8 +92,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 【关键】清理旧数据，确保UUID配置生效
-        // 每次启动都清理 nezha-work 目录，强制它读取配置文件里的 UUID
+        // 【关键】强力清理旧数据
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             try (Stream<Path> walk = Files.walk(nezhaDir)) {
@@ -106,7 +105,11 @@ public class Bootstrap
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         
-        // 【修复】只保留最基础的参数，防止参数不支持导致崩溃
+        // 【DEBUG】打印一下配置文件内容，确保写入无误
+        System.out.println("--- Generated Config Content ---");
+        Files.readAllLines(nezhaConfigPath).forEach(System.out::println);
+        System.out.println("--------------------------------");
+
         List<String> cmd = new ArrayList<>();
         cmd.add(nezhaPath.toString());
         cmd.add("-c");
@@ -130,10 +133,9 @@ public class Bootstrap
             } catch (IOException e) {}
         }).start();
         
-        // 检查进程是否立即死亡
         Thread.sleep(1000);
         if (!nezhaProcess.isAlive()) {
-             System.out.println(ANSI_RED + "Nezha Agent exited prematurely with code: " + nezhaProcess.exitValue() + ANSI_RESET);
+             System.out.println(ANSI_RED + "Nezha Agent exited prematurely: " + nezhaProcess.exitValue() + ANSI_RESET);
         }
     }
     
@@ -190,32 +192,39 @@ public class Bootstrap
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         if (!server.contains(":")) server += ":" + port;
         
-        // 你的端口 53100 必须使用 TLS=false
         boolean tls = false;
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
         }
         
+        String uuid = config.get("UUID");
+        String secret = config.get("NEZHA_KEY");
+        
+        // 【核心修改】
+        // 1. 同时写入 client_id 和 uuid，兼容所有版本
+        // 2. 给字符串加上双引号，防止 YAML 解析歧义
         String yml = String.format(
-            "uuid: %s\n" +
-            "client_secret: %s\n" +
+            "client_id: \"%s\"\n" +  // 兼容老版本
+            "uuid: \"%s\"\n" +       // 兼容新版本
+            "client_secret: \"%s\"\n" +
             "debug: true\n" +
-            "server: %s\n" +
+            "server: \"%s\"\n" +
             "tls: %b\n" +
             "report_delay: 4\n" +
             "skip_connection_count: true\n" +
             "skip_procs_count: true\n" +
             "disable_auto_update: true\n" +
             "disable_force_update: true\n",
-            config.get("UUID"),
-            config.get("NEZHA_KEY"),
+            uuid,
+            uuid,
+            secret,
             server,
             tls
         );
         
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(path, yml.getBytes());
-        System.out.println(ANSI_GREEN + "Nezha Config: TLS=" + tls + ", UUID=" + config.get("UUID") + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Nezha Config created for UUID: " + uuid + ANSI_RESET);
         return path;
     }
     
