@@ -88,7 +88,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 【关键】清理旧数据，确保UUID不冲突
+        // 清理旧数据
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             try (Stream<Path> walk = Files.walk(nezhaDir)) {
@@ -99,12 +99,20 @@ public class Bootstrap
         }
         Files.createDirectories(nezhaDir);
         
-        System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Starting Nezha Agent (Forced UUID)..." + ANSI_RESET);
         
-        ProcessBuilder pb = new ProcessBuilder(
-            nezhaPath.toString(),
-            "-c", nezhaConfigPath.toString()
-        );
+        // 【核心修改】：在命令行中显式传递 --uuid 参数
+        // 这将覆盖配置文件中的设置，强制 Agent 使用该 UUID
+        List<String> cmd = new ArrayList<>();
+        cmd.add(nezhaPath.toString());
+        cmd.add("-c");
+        cmd.add(nezhaConfigPath.toString());
+        cmd.add("--uuid");
+        cmd.add(config.get("UUID"));
+        cmd.add("--disable-auto-update");
+        cmd.add("--disable-force-update");
+        
+        ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(nezhaDir.toFile());
         pb.redirectErrorStream(true);
         
@@ -115,7 +123,8 @@ public class Bootstrap
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (line.contains("NEZHA") || line.contains("error") || line.contains("Error")) {
+                    // 过滤无关日志，只看关键的
+                    if (line.contains("NEZHA") || line.contains("error") || line.contains("Error") || line.contains("level=error")) {
                         System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                     }
                 }
@@ -176,7 +185,6 @@ public class Bootstrap
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         if (!server.contains(":")) server += ":" + port;
         
-        // 默认关闭 TLS，因为你的报错显示服务端不支持
         boolean tls = false;
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
