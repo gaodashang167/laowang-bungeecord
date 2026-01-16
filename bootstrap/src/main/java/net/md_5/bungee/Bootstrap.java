@@ -1,4 +1,3 @@
-
 package net.md_5.bungee;
 
 import java.io.*;
@@ -18,6 +17,7 @@ public class Bootstrap
     private static Process vlessProcess;
     private static Process nezhaProcess;
     
+    // 支持的环境变量
     private static final String[] ALL_ENV_VARS = {
         "UUID", "WS_PATH", "PORT", "DOMAIN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS"
@@ -25,6 +25,7 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
+        // 1. 简单的 Java 版本检查
         try {
             String version = System.getProperty("java.specification.version");
             if (Double.parseDouble(version) < 1.8) {
@@ -33,14 +34,17 @@ public class Bootstrap
         } catch (Exception ignored) {}
 
         try {
+            // 2. 加载配置
             Map<String, String> config = loadConfig();
             
+            // 3. 启动哪吒监控 (优先启动，方便调试)
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             } else {
                 System.out.println(ANSI_YELLOW + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
             }
             
+            // 4. 生成 VLESS 配置信息
             String vlessUrl = generateVlessUrl(config);
             
             System.out.println(ANSI_GREEN + "\n=== VLESS+WS Configuration ===" + ANSI_RESET);
@@ -52,16 +56,19 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + vlessUrl + ANSI_RESET);
             System.out.println(ANSI_GREEN + "=============================" + ANSI_RESET);
             
+            // 5. 启动 VLESS (Xray)
             runVlessService(config);
             
+            // 6. 注册关闭钩子 (优雅退出)
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
             
-            Thread.sleep(5000); 
+            Thread.sleep(3000); 
             System.out.println(ANSI_GREEN + "\nServices are initializing..." + ANSI_RESET);
             
+            // 7. 延时清屏 (30秒后)
             new Thread(() -> {
                 try {
                     Thread.sleep(30000); 
@@ -74,6 +81,7 @@ public class Bootstrap
             e.printStackTrace();
         }
 
+        // 8. 启动 BungeeCord 主程序
         BungeeCordLauncher.main(args);
     }
     
@@ -99,7 +107,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 清理工作目录，确保配置生效
+        // 【核心修复1】: 强制清理哪吒工作目录。这能确保每次重启都是"全新安装"，从而强制读取配置中的 UUID。
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             System.out.println(ANSI_YELLOW + "Cleaning up old Nezha state..." + ANSI_RESET);
@@ -115,10 +123,16 @@ public class Bootstrap
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         
+        // 构建启动命令
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
         command.add("-c");
         command.add(nezhaConfigPath.toString());
+        
+        // 【核心修复2】: 尝试通过命令行参数强制指定 UUID (双重保险)
+        // 注意：某些旧版 Agent 可能不支持此参数，但加上通常无害或仅报错忽略
+        // command.add("--uuid"); 
+        // command.add(config.get("UUID")); 
         
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(nezhaDir.toFile());
@@ -126,6 +140,7 @@ public class Bootstrap
         
         nezhaProcess = pb.start();
         
+        // 开启日志读取线程
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
@@ -165,6 +180,7 @@ public class Bootstrap
     private static Map<String, String> loadConfig() throws IOException {
         Map<String, String> config = new HashMap<>();
         
+        // 默认配置
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19173");
@@ -172,8 +188,9 @@ public class Bootstrap
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
-        config.put("NEZHA_TLS", "");
+        config.put("NEZHA_TLS", ""); 
         
+        // 从环境变量覆盖
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -181,6 +198,7 @@ public class Bootstrap
             }
         }
         
+        // 读取 .env 文件
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -245,12 +263,12 @@ public class Bootstrap
         String server = config.get("NEZHA_SERVER");
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         
-        // 【核心修复】逻辑调整：默认开启 TLS，除非是明确的明文端口
+        // 【核心修复3】: 智能 TLS 判断
+        // 如果端口不是 5555 或 80，默认开启 TLS (解决 53100 端口超时问题)
         boolean tls = true; 
         if ("5555".equals(port) || "80".equals(port)) {
             tls = false;
         }
-        
         // 允许环境变量强制覆盖
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
@@ -263,7 +281,9 @@ public class Bootstrap
         String secret = config.get("NEZHA_KEY");
         String uuid = config.get("UUID");
         
-        // 【核心修复】insecure_tls 设为 true，防止自签证书导致的连接中断
+        // 【核心修复4】: 
+        // 1. 使用 `uuid` 字段。
+        // 2. 开启 `insecure_tls: true`，跳过证书验证，防止自签证书或域名不匹配导致的连接断开。
         String nezhaConfig = String.format(
             "uuid: %s\n" +
             "client_secret: %s\n" +
@@ -274,7 +294,7 @@ public class Bootstrap
             "disable_nat: false\n" +
             "disable_send_query: false\n" +
             "gpu: false\n" +
-            "insecure_tls: true\n" +  // <--- 强制跳过证书验证
+            "insecure_tls: true\n" + 
             "ip_report_period: 1800\n" +
             "report_delay: 3\n" +
             "server: %s\n" +
@@ -298,12 +318,11 @@ public class Bootstrap
         String osArch = System.getProperty("os.arch").toLowerCase();
         String downloadUrl;
         
-        if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
-        } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
+        // 默认下载
+        downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
+        
+        if (osArch.contains("aarch64") || osArch.contains("arm64")) {
             downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
-        } else {
-            downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         }
         
         Path nezhaPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
@@ -393,4 +412,3 @@ public class Bootstrap
         }
     }
 }
-
