@@ -1,14 +1,4 @@
-这是一个完整的、修正后的 `Bootstrap.java`。
 
-**主要修改点：**
-1.  **强制清理旧数据**：在启动哪吒前，自动删除 `/tmp/nezha-work` 目录。这是解决“UUID不生效/无法固定”的最核心步骤，因为它清除了旧的身份缓存文件。
-2.  **修正配置字段**：将 `client_id` 改回了正确的 `uuid`。
-3.  **自动识别 TLS**：如果你的哪吒端口是 `443` 或 `8443`，会自动开启 TLS（`tls: true`），否则默认为关。
-4.  **开启调试日志**：设置了 `debug: true`，如果启动失败，控制台会打印具体原因。
-
-你只需要直接复制覆盖即可：
-
-```java
 package net.md_5.bungee;
 
 import java.io.*;
@@ -35,7 +25,7 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        // 简单的 Java 版本检查
+
         try {
             String version = System.getProperty("java.specification.version");
             if (Double.parseDouble(version) < 1.8) {
@@ -46,14 +36,14 @@ public class Bootstrap
         try {
             Map<String, String> config = loadConfig();
             
-            // 1. 启动哪吒监控
+
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             } else {
                 System.out.println(ANSI_YELLOW + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
             }
             
-            // 2. 启动 VLESS+WS
+
             String vlessUrl = generateVlessUrl(config);
             
             System.out.println(ANSI_GREEN + "\n=== VLESS+WS Configuration ===" + ANSI_RESET);
@@ -67,20 +57,20 @@ public class Bootstrap
             
             runVlessService(config);
             
-            // 3. 注册关闭钩子
+
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
             
-            // 4. 等待服务稳定
+
             Thread.sleep(5000); 
             System.out.println(ANSI_GREEN + "\nServices are initializing..." + ANSI_RESET);
             
-            // 延迟清屏，让用户有机会看到上面的 URL
+
             new Thread(() -> {
                 try {
-                    Thread.sleep(30000); // 30秒后清屏
+                    Thread.sleep(30000);
                     clearConsole();
                 } catch (InterruptedException e) {}
             }).start();
@@ -90,7 +80,7 @@ public class Bootstrap
             e.printStackTrace();
         }
 
-        // 5. 启动 BungeeCord (主程序)
+
         BungeeCordLauncher.main(args);
     }
     
@@ -116,7 +106,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 【关键修复】: 强制清理哪吒的工作目录，防止旧的 UUID 缓存文件导致冲突
+
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             System.out.println(ANSI_YELLOW + "Cleaning up old Nezha state..." + ANSI_RESET);
@@ -143,17 +133,17 @@ public class Bootstrap
         
         nezhaProcess = pb.start();
         
-        // 开启线程实时读取日志，方便调试
+
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 只打印关键信息或者所有信息（这里打印所有以便你排错）
+
                     System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                 }
             } catch (IOException e) {
-                // 进程退出时流关闭是正常的
+
             }
         }).start();
         
@@ -176,7 +166,7 @@ public class Bootstrap
             configPath.toString()
         );
         pb.redirectErrorStream(true);
-        // Xray 日志直接继承主进程输出，也可以改为读取流
+
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
         vlessProcess = pb.start();
@@ -186,7 +176,7 @@ public class Bootstrap
     private static Map<String, String> loadConfig() throws IOException {
         Map<String, String> config = new HashMap<>();
         
-        // 默认配置
+
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19173");
@@ -194,9 +184,9 @@ public class Bootstrap
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
-        config.put("NEZHA_TLS", ""); // 留空则自动判断
+        config.put("NEZHA_TLS", ""); 
         
-        // 从系统环境变量读取
+
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -204,7 +194,7 @@ public class Bootstrap
             }
         }
         
-        // 简单的 .env 文件读取 (可选)
+
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -269,12 +259,12 @@ public class Bootstrap
         String server = config.get("NEZHA_SERVER");
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         
-        // 自动判断 TLS
+
         boolean tls = false;
         if ("443".equals(port) || "8443".equals(port)) {
             tls = true;
         }
-        // 如果环境变量强制指定了 TLS
+
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
         }
@@ -286,7 +276,7 @@ public class Bootstrap
         String secret = config.get("NEZHA_KEY");
         String uuid = config.get("UUID"); // VLESS UUID 作为 Agent UUID
         
-        // 【修正】使用 uuid 字段，开启 debug
+
         String nezhaConfig = String.format(
             "uuid: %s\n" +
             "client_secret: %s\n" +
@@ -332,7 +322,7 @@ public class Bootstrap
         
         Path nezhaPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
         
-        // 简单判断文件是否存在，如果文件太小可能下载失败，这里只做存在性判断
+
         if (!Files.exists(nezhaPath)) {
             System.out.println(ANSI_GREEN + "Downloading Nezha Agent..." + ANSI_RESET);
             Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent.zip");
@@ -383,7 +373,7 @@ public class Bootstrap
     
     private static void extractNezhaAgent(Path zipPath, Path outputPath) throws IOException {
         try {
-            // 尝试使用 unzip 命令
+
             new ProcessBuilder("unzip", "-o", zipPath.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir"))
                 .start().waitFor();
             Path extracted = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
