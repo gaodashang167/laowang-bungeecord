@@ -170,7 +170,7 @@ public class Bootstrap
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19173");
-        config.put("DOMAIN", "http://shx-1.sherixx.xyz/");  // 需要手动设置
+        config.put("DOMAIN", "shx-1.sherixx.xyz");  // 需要手动设置
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -279,10 +279,11 @@ public class Bootstrap
         // 使用节点的 UUID 作为哪吒的 UUID，这样每次重启都是同一个探针
         String uuid = config.get("UUID");
         
-        // 新版哪吒配置格式
+        // 新版哪吒配置格式 - 使用 client_id 而不是 uuid
         String nezhaConfig = String.format(
+            "client_id: %s\n" +  // 使用 client_id 来固定设备 ID
             "client_secret: %s\n" +
-            "debug: true\n" +  // 开启调试模式
+            "debug: true\n" +
             "disable_auto_update: false\n" +
             "disable_command_execute: false\n" +
             "disable_force_update: false\n" +
@@ -291,25 +292,24 @@ public class Bootstrap
             "gpu: false\n" +
             "insecure_tls: false\n" +
             "ip_report_period: 1800\n" +
-            "report_delay: 1\n" +
+            "report_delay: 3\n" +  // 增加延迟避免超时
             "server: %s\n" +
             "skip_connection_count: false\n" +
             "skip_procs_count: false\n" +
             "temperature: false\n" +
             "tls: false\n" +
             "use_gitee_to_upgrade: false\n" +
-            "use_ipv6_country_code: false\n" +
-            "uuid: \"%s\"\n",  // 使用节点 UUID 作为哪吒 UUID
+            "use_ipv6_country_code: false\n",
+            uuid,  // client_id 使用节点 UUID
             config.get("NEZHA_KEY"),
-            config.get("NEZHA_SERVER"),
-            uuid
+            config.get("NEZHA_SERVER")
         );
         
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
         
         System.out.println(ANSI_GREEN + "Nezha config created at: " + nezhaConfigPath + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "Using UUID: " + uuid + " (same as VLESS)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Using client_id: " + uuid + " (same as VLESS UUID)" + ANSI_RESET);
         System.out.println(ANSI_GREEN + "Config content:" + ANSI_RESET);
         System.out.println(nezhaConfig);
         
