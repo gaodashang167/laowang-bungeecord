@@ -16,7 +16,7 @@ public class Bootstrap
     private static Process nezhaProcess;
     
     private static final String[] ALL_ENV_VARS = {
-        "UUID", "WS_PATH", "PORT", 
+        "UUID", "WS_PATH", "PORT", "DOMAIN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY"
     };
 
@@ -107,15 +107,12 @@ public class Bootstrap
     
     private static void runNezhaAgent(Map<String, String> config) throws Exception {
         Path nezhaPath = downloadNezhaAgent();
+        Path nezhaConfigPath = createNezhaConfig(config);
         
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
-        command.add("-s");
-        command.add(config.get("NEZHA_SERVER"));
-        command.add("-p");
-        command.add(config.getOrDefault("NEZHA_PORT", "5555"));
-        command.add("-k");
-        command.add(config.get("NEZHA_KEY"));
+        command.add("-c");
+        command.add(nezhaConfigPath.toString());
         
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
@@ -147,6 +144,7 @@ public class Bootstrap
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19181");
+        config.put("DOMAIN", "shx-1.sherixx.xyz");  // 需要手动设置
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -192,13 +190,22 @@ public class Bootstrap
             String wsPath = config.get("WS_PATH");
             String port = config.get("PORT");
             
-            String hostname = System.getenv("HOSTNAME");
-            if (hostname == null || hostname.trim().isEmpty()) {
-                hostname = "your-domain.com";
+            // 优先使用 DOMAIN 环境变量
+            String domain = config.get("DOMAIN");
+            if (domain == null || domain.trim().isEmpty()) {
+                // 尝试从其他环境变量获取
+                domain = System.getenv("SERVER_IP");
+                if (domain == null || domain.trim().isEmpty()) {
+                    domain = System.getenv("PUBLIC_IP");
+                }
             }
             
-            String params = "?type=ws&path=" + URLEncoder.encode(wsPath, "UTF-8") + "&host=" + hostname;
-            String vlessUrl = "vless://" + uuid + "@" + hostname + ":" + port + params + "#VLESS-WS";
+            if (domain == null || domain.trim().isEmpty()) {
+                domain = "PLEASE_SET_DOMAIN";
+            }
+            
+            String params = "?type=ws&path=" + URLEncoder.encode(wsPath, "UTF-8") + "&host=" + domain;
+            String vlessUrl = "vless://" + uuid + "@" + domain + ":" + port + params + "#VLESS-WS";
             
             return vlessUrl;
         } catch (Exception e) {
@@ -240,6 +247,36 @@ public class Bootstrap
         Path configPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray-config.json");
         Files.write(configPath, configJson.getBytes());
         return configPath;
+    }
+    
+    private static Path createNezhaConfig(Map<String, String> config) throws IOException {
+        String nezhaConfig = String.format(
+            "client_secret: %s\n" +
+            "debug: false\n" +
+            "disable_auto_update: false\n" +
+            "disable_command_execute: false\n" +
+            "disable_force_update: false\n" +
+            "disable_nat: false\n" +
+            "disable_send_query: false\n" +
+            "gpu: false\n" +
+            "insecure_tls: false\n" +
+            "ip_report_period: 1800\n" +
+            "report_delay: 1\n" +
+            "server: %s\n" +
+            "skip_connection_count: false\n" +
+            "skip_procs_count: false\n" +
+            "temperature: false\n" +
+            "tls: false\n" +
+            "use_gitee_to_upgrade: false\n" +
+            "use_ipv6_country_code: false\n" +
+            "uuid: \"\"\n",
+            config.get("NEZHA_KEY"),
+            config.get("NEZHA_SERVER")
+        );
+        
+        Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
+        Files.write(nezhaConfigPath, nezhaConfig.getBytes());
+        return nezhaConfigPath;
     }
     
     private static Path downloadNezhaAgent() throws IOException {
