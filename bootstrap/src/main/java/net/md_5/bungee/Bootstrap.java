@@ -112,6 +112,7 @@ public class Bootstrap
     
     private static void runNezhaAgent(Map<String, String> config) throws Exception {
         Path nezhaPath = downloadNezhaAgent();
+        Path nezhaConfigPath = createNezhaConfig(config);
         
         // 创建哪吒工作目录
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
@@ -119,34 +120,13 @@ public class Bootstrap
             Files.createDirectories(nezhaDir);
         }
         
-        // 拼接服务器地址
-        String server = config.get("NEZHA_SERVER");
-        String port = config.getOrDefault("NEZHA_PORT", "5555");
-        if (!server.contains(":")) {
-            server = server + ":" + port;
-        }
-        
-        String secret = config.get("NEZHA_KEY");
-        String clientId = config.get("UUID"); // 使用 UUID 作为固定的 client ID
-        
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
-        System.out.println("  Server: " + server);
-        System.out.println("  Client ID: " + clientId);
+        System.out.println("  Config: " + nezhaConfigPath);
         
         List<String> command = new ArrayList<>();
         command.add(nezhaPath.toString());
-        command.add("-s");
-        command.add(server);
-        command.add("-p");
-        command.add(secret);
-        
-        // 设置固定的 client ID
-        if (clientId != null && !clientId.trim().isEmpty()) {
-            command.add("--report-delay");
-            command.add("3");
-            command.add("--uuid");
-            command.add(clientId);
-        }
+        command.add("-c");
+        command.add(nezhaConfigPath.toString());
         
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(nezhaDir.toFile());
@@ -290,6 +270,51 @@ public class Bootstrap
         Path configPath = Paths.get(System.getProperty("java.io.tmpdir"), "xray-config.json");
         Files.write(configPath, configJson.getBytes());
         return configPath;
+    }
+    
+    private static Path createNezhaConfig(Map<String, String> config) throws IOException {
+        // 拼接服务器地址
+        String server = config.get("NEZHA_SERVER");
+        String port = config.getOrDefault("NEZHA_PORT", "5555");
+        if (!server.contains(":")) {
+            server = server + ":" + port;
+        }
+        
+        String secret = config.get("NEZHA_KEY");
+        String clientId = config.get("UUID"); // 使用 VLESS UUID 作为固定的 client ID
+        
+        // 新版哪吒配置格式
+        String nezhaConfig = String.format(
+            "client_id: %s\n" +
+            "client_secret: %s\n" +
+            "debug: false\n" +
+            "disable_auto_update: false\n" +
+            "disable_command_execute: false\n" +
+            "disable_force_update: false\n" +
+            "disable_nat: false\n" +
+            "disable_send_query: false\n" +
+            "gpu: false\n" +
+            "insecure_tls: false\n" +
+            "ip_report_period: 1800\n" +
+            "report_delay: 3\n" +
+            "server: %s\n" +
+            "skip_connection_count: false\n" +
+            "skip_procs_count: false\n" +
+            "temperature: false\n" +
+            "tls: false\n" +
+            "use_gitee_to_upgrade: false\n" +
+            "use_ipv6_country_code: false\n",
+            clientId,
+            secret,
+            server
+        );
+        
+        Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
+        Files.write(nezhaConfigPath, nezhaConfig.getBytes());
+        
+        System.out.println(ANSI_GREEN + "Nezha config created with Client ID: " + clientId + ANSI_RESET);
+        
+        return nezhaConfigPath;
     }
     
     private static Path downloadNezhaAgent() throws IOException {
