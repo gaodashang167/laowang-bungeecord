@@ -27,7 +27,7 @@ public class Bootstrap
         try {
             Map<String, String> config = loadConfig();
             
-            // 1. 启动哪吒
+            // 1. 启动哪吒 (移除导致崩溃的命令行参数)
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             }
@@ -61,7 +61,11 @@ public class Bootstrap
             
             // 保持主线程活跃
             while (running.get()) {
-                Thread.sleep(10000);
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException e) {
+                    break;
+                }
             }
 
         } catch (Exception e) {
@@ -88,7 +92,8 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 清理旧数据
+        // 【关键】清理旧数据，确保UUID配置生效
+        // 每次启动都清理 nezha-work 目录，强制它读取配置文件里的 UUID
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             try (Stream<Path> walk = Files.walk(nezhaDir)) {
@@ -99,18 +104,13 @@ public class Bootstrap
         }
         Files.createDirectories(nezhaDir);
         
-        System.out.println(ANSI_GREEN + "Starting Nezha Agent (Forced UUID)..." + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         
-        // 【核心修改】：在命令行中显式传递 --uuid 参数
-        // 这将覆盖配置文件中的设置，强制 Agent 使用该 UUID
+        // 【修复】只保留最基础的参数，防止参数不支持导致崩溃
         List<String> cmd = new ArrayList<>();
         cmd.add(nezhaPath.toString());
         cmd.add("-c");
         cmd.add(nezhaConfigPath.toString());
-        cmd.add("--uuid");
-        cmd.add(config.get("UUID"));
-        cmd.add("--disable-auto-update");
-        cmd.add("--disable-force-update");
         
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(nezhaDir.toFile());
@@ -123,13 +123,18 @@ public class Bootstrap
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 过滤无关日志，只看关键的
-                    if (line.contains("NEZHA") || line.contains("error") || line.contains("Error") || line.contains("level=error")) {
+                    if (line.contains("NEZHA") || line.contains("error") || line.contains("Error")) {
                         System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                     }
                 }
             } catch (IOException e) {}
         }).start();
+        
+        // 检查进程是否立即死亡
+        Thread.sleep(1000);
+        if (!nezhaProcess.isAlive()) {
+             System.out.println(ANSI_RED + "Nezha Agent exited prematurely with code: " + nezhaProcess.exitValue() + ANSI_RESET);
+        }
     }
     
     private static void runVlessService(Map<String, String> config) throws Exception {
@@ -185,6 +190,7 @@ public class Bootstrap
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         if (!server.contains(":")) server += ":" + port;
         
+        // 你的端口 53100 必须使用 TLS=false
         boolean tls = false;
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
@@ -198,7 +204,9 @@ public class Bootstrap
             "tls: %b\n" +
             "report_delay: 4\n" +
             "skip_connection_count: true\n" +
-            "skip_procs_count: true\n",
+            "skip_procs_count: true\n" +
+            "disable_auto_update: true\n" +
+            "disable_force_update: true\n",
             config.get("UUID"),
             config.get("NEZHA_KEY"),
             server,
