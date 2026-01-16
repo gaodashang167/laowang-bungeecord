@@ -115,7 +115,6 @@ public class Bootstrap
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 过滤掉部分心跳日志，只显示关键信息
                     if (line.contains("NEZHA") || line.contains("error") || line.contains("Error")) {
                         System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
                     }
@@ -177,9 +176,9 @@ public class Bootstrap
         String port = config.getOrDefault("NEZHA_PORT", "5555");
         if (!server.contains(":")) server += ":" + port;
         
-        // 核心修改：默认关闭 TLS，因为你的服务器是明文的
+        // 默认关闭 TLS，因为你的报错显示服务端不支持
         boolean tls = false;
-        if (config.containsKey("NEZHA_TLS")) {
+        if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
             tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
         }
         
@@ -189,9 +188,9 @@ public class Bootstrap
             "debug: true\n" +
             "server: %s\n" +
             "tls: %b\n" +
-            "report_delay: 4\n" +  // 稍微增加延时防止拥堵
-            "skip_connection_count: true\n" + // 跳过连接数统计以节省资源
-            "skip_procs_count: true\n",       // 跳过进程统计
+            "report_delay: 4\n" +
+            "skip_connection_count: true\n" +
+            "skip_procs_count: true\n",
             config.get("UUID"),
             config.get("NEZHA_KEY"),
             server,
@@ -217,7 +216,11 @@ public class Bootstrap
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
             }
-            new ProcessBuilder("unzip", "-o", zip.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            try {
+                new ProcessBuilder("unzip", "-o", zip.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            } catch (InterruptedException e) {
+                throw new IOException("Nezha unzip interrupted", e);
+            }
             Files.delete(zip);
             path.toFile().setExecutable(true);
         }
@@ -237,7 +240,11 @@ public class Bootstrap
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
             }
-            new ProcessBuilder("unzip", "-o", zip.toString(), "xray", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            try {
+                new ProcessBuilder("unzip", "-o", zip.toString(), "xray", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            } catch (InterruptedException e) {
+                throw new IOException("Xray unzip interrupted", e);
+            }
             Files.delete(zip);
             path.toFile().setExecutable(true);
         }
