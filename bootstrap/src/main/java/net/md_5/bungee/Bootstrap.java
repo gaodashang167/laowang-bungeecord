@@ -275,17 +275,18 @@ public class Bootstrap
     private static Path createNezhaConfig(Map<String, String> config) throws IOException {
         // 拼接服务器地址
         String server = config.get("NEZHA_SERVER");
-        String port = config.getOrDefault("NEZHA_PORT", "5555");
+        String port = config.getOrDefault("NEZHA_PORT", "");
         if (!server.contains(":")) {
             server = server + ":" + port;
         }
         
         String secret = config.get("NEZHA_KEY");
-        String clientId = config.get("UUID"); // 使用 VLESS UUID 作为固定的 client ID
+        String uuid = config.get("UUID"); // 获取 VLESS UUID
         
         // 新版哪吒配置格式
+        // 核心修改：将 'client_id' 改为 'uuid'
         String nezhaConfig = String.format(
-            "client_id: %s\n" +
+            "uuid: %s\n" +           // <--- 这里修改了 key
             "client_secret: %s\n" +
             "debug: false\n" +
             "disable_auto_update: false\n" +
@@ -304,7 +305,7 @@ public class Bootstrap
             "tls: false\n" +
             "use_gitee_to_upgrade: false\n" +
             "use_ipv6_country_code: false\n",
-            clientId,
+            uuid,    // 对应上面的 %s
             secret,
             server
         );
@@ -312,10 +313,11 @@ public class Bootstrap
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
         
-        System.out.println(ANSI_GREEN + "Nezha config created with Client ID: " + clientId + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Nezha config created with UUID: " + uuid + ANSI_RESET);
         
         return nezhaConfigPath;
     }
+
     
     private static Path downloadNezhaAgent() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
