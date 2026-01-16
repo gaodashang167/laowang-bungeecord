@@ -283,12 +283,12 @@ public class Bootstrap
         String secret = config.get("NEZHA_KEY");
         String clientId = config.get("UUID"); // 使用 VLESS UUID 作为固定的 client ID
         
-        // 新版哪吒配置格式
+        // 哪吒配置 - 同时设置 client_id 和 uuid 字段
         String nezhaConfig = String.format(
             "client_id: %s\n" +
             "client_secret: %s\n" +
             "debug: false\n" +
-            "disable_auto_update: false\n" +
+            "disable_auto_update: true\n" +  // 禁用自动更新
             "disable_command_execute: false\n" +
             "disable_force_update: false\n" +
             "disable_nat: false\n" +
@@ -303,16 +303,23 @@ public class Bootstrap
             "temperature: false\n" +
             "tls: false\n" +
             "use_gitee_to_upgrade: false\n" +
-            "use_ipv6_country_code: false\n",
+            "use_ipv6_country_code: false\n" +
+            "uuid: %s\n",  // 添加 uuid 字段
             clientId,
             secret,
-            server
+            server,
+            clientId
         );
         
         Path nezhaConfigPath = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(nezhaConfigPath, nezhaConfig.getBytes());
         
-        System.out.println(ANSI_GREEN + "Nezha config created with Client ID: " + clientId + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "=== Nezha Configuration ===" + ANSI_RESET);
+        System.out.println("Client ID: " + clientId);
+        System.out.println("Server: " + server);
+        System.out.println("Config file content:");
+        System.out.println(nezhaConfig);
+        System.out.println(ANSI_GREEN + "===========================" + ANSI_RESET);
         
         return nezhaConfigPath;
     }
