@@ -153,10 +153,10 @@ public class Bootstrap
     
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
-        config.put("UUID", "99756805-1247-4b6a-9d3b-dad6206bd137");
+        config.put("UUID", "88756805-1247-4b6a-9d3b-dad6206bd137");
         config.put("WS_PATH", "/vless");
-        config.put("PORT", "19173");
-        config.put("DOMAIN", "shx-1.sherixx.xyz");
+        config.put("PORT", "20374");
+        config.put("DOMAIN", "play.greathost.es");
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
