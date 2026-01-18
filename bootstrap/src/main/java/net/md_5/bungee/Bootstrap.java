@@ -157,7 +157,7 @@ public class Bootstrap
         Map<String, String> config = new HashMap<>();
         config.put("UUID", "08fa4320-57fe-4997-a3f6-89c9301b1fbf");
         config.put("WS_PATH", "/vless");
-        config.put("PORT", "25779");
+        config.put("PORT", "25580");
         config.put("DOMAIN", "luminus.kingsnetwork.uk");
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
