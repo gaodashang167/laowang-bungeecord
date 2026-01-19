@@ -188,12 +188,12 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
-        config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
+        config.put("UUID", "8d490099-7b19-407b-9695-98a02df03a88");
+        config.put("HY2_PASSWORD", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
-        config.put("UDP_PORT", "25389");  // 单端口
+        config.put("UDP_PORT", "25655");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "151.242.106.72");
+        config.put("DOMAIN", "luminus.kingsnetwork.uk");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
