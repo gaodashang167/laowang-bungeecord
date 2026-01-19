@@ -165,7 +165,16 @@ public class Bootstrap
                     new InputStreamReader(hy2Process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    System.out.println(ANSI_YELLOW + "[Hysteria2] " + ANSI_RESET + line);
+                    // 过滤掉客户端连接日志（包含 IP 地址）
+                    if (line.contains("client connected") || 
+                        line.contains("client disconnected") ||
+                        line.contains("addr")) {
+                        continue;  // 跳过这些日志
+                    }
+                    // 只显示错误和警告
+                    if (line.contains("ERROR") || line.contains("WARN") || line.contains("FATAL")) {
+                        System.out.println(ANSI_YELLOW + "[Hysteria2] " + ANSI_RESET + line);
+                    }
                 }
             } catch (IOException e) {}
         }).start();
@@ -183,7 +192,7 @@ public class Bootstrap
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
         config.put("UDP_PORT", "25389");  // 单端口
-        config.put("HY2_PORTS", "1000-2000,3000,4000");  // 跳跃端口范围（可选）
+        config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
         config.put("DOMAIN", "151.242.106.72");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI
         config.put("HY2_ALPN", "h3");  // ALPN 协议
