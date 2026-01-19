@@ -6,6 +6,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class Bootstrap
 {
@@ -16,11 +18,13 @@ public class Bootstrap
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process hy2Process;
     private static Process nezhaProcess;
+    private static Thread keepaliveThread;
     
     private static final String[] ALL_ENV_VARS = {
         "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
         "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
-        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS"
+        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
+        "MC_SERVER", "MC_PORT"
     };
 
     public static void main(String[] args) throws Exception
@@ -49,6 +53,11 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
             
             runHysteria2Service(config);
+            
+            // 3. 启动 Minecraft 保活
+            if (isMcKeepaliveEnabled(config)) {
+                startMcKeepalive(config);
+            }
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
@@ -188,18 +197,21 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "8d490099-7b19-407b-9695-98a02df03a88");
-        config.put("HY2_PASSWORD", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");  
+        config.put("UUID", "94054b12-853a-4094-9eac-9ee4496026b6");
+        config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
-        config.put("UDP_PORT", "15017");  // 单端口
+        config.put("UDP_PORT", "25655");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "free.cloudblaze.org");
+        config.put("DOMAIN", "luminus.kingsnetwork.uk");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
-        config.put("NEZHA_TLS", "false"); 
+        config.put("NEZHA_TLS", "false");
+        // Minecraft 保活配置
+        config.put("MC_SERVER", "luminus.kingsnetwork.uk");  // 要连接的服务器ip
+        config.put("MC_PORT", "25655");  // 服务器端口
         
         // 环境变量覆盖
         for (String var : ALL_ENV_VARS) {
@@ -390,6 +402,8 @@ public class Bootstrap
         return path;
     }
     
+    // ==================== Xray 下载（备用，如果需要切换回 VLESS）====================
+    
     private static Path downloadNezhaAgent() throws IOException {
         String url = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         if (System.getProperty("os.arch").contains("aarch64")) {
@@ -403,13 +417,10 @@ public class Bootstrap
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
             }
-            try {
-                new ProcessBuilder("unzip", "-o", zip.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
-            } catch (InterruptedException e) {
-                throw new IOException("Nezha unzip interrupted", e);
-            }
+            
+            // 使用 Java 解压替代 unzip 命令
+            unzipFile(zip, Paths.get(System.getProperty("java.io.tmpdir")), "nezha-agent");
             Files.delete(zip);
-            path.toFile().setExecutable(true);
         }
         return path;
     }
@@ -417,5 +428,137 @@ public class Bootstrap
     private static void stopServices() {
         if (nezhaProcess != null) nezhaProcess.destroy();
         if (hy2Process != null) hy2Process.destroy();
+        if (keepaliveThread != null) keepaliveThread.interrupt();
+    }
+    
+    // ==================== Minecraft 保活功能 ====================
+    
+    private static boolean isMcKeepaliveEnabled(Map<String, String> config) {
+        String server = config.get("MC_SERVER");
+        return server != null && !server.trim().isEmpty();
+    }
+    
+    private static void startMcKeepalive(Map<String, String> config) {
+        String server = config.get("MC_SERVER");
+        int port = Integer.parseInt(config.getOrDefault("MC_PORT", "25565"));
+        
+        System.out.println(ANSI_GREEN + "Starting Minecraft Keepalive: " + server + ":" + port + ANSI_RESET);
+        
+        keepaliveThread = new Thread(() -> {
+            while (running.get()) {
+                try {
+                    pingMinecraftServer(server, port);
+                    Thread.sleep(300000); // 每5分钟一次
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    System.out.println(ANSI_YELLOW + "[MC-Keepalive] Ping failed: " + e.getMessage() + ANSI_RESET);
+                    try {
+                        Thread.sleep(60000); // 失败后1分钟重试
+                    } catch (InterruptedException ex) {
+                        break;
+                    }
+                }
+            }
+        });
+        keepaliveThread.setDaemon(true);
+        keepaliveThread.start();
+    }
+    
+    private static void pingMinecraftServer(String host, int port) throws IOException {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5000);
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            
+            // 发送握手包 (Handshake)
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream packet = new DataOutputStream(buf);
+            
+            writeVarInt(packet, 0x00); // 包ID
+            writeVarInt(packet, 47);   // 协议版本 (1.8.x)
+            writeString(packet, host);
+            packet.writeShort(port);
+            writeVarInt(packet, 1);    // 下一个状态: status
+            
+            byte[] handshake = buf.toByteArray();
+            writeVarInt(out, handshake.length);
+            out.write(handshake);
+            
+            // 发送状态请求 (Status Request)
+            buf.reset();
+            packet = new DataOutputStream(buf);
+            writeVarInt(packet, 0x00); // 包ID
+            
+            byte[] request = buf.toByteArray();
+            writeVarInt(out, request.length);
+            out.write(request);
+            out.flush();
+            
+            // 读取响应
+            int length = readVarInt(in);
+            if (length > 0) {
+                int packetId = readVarInt(in);
+                if (packetId == 0x00) {
+                    int jsonLength = readVarInt(in);
+                    byte[] jsonData = new byte[jsonLength];
+                    in.readFully(jsonData);
+                    System.out.println(ANSI_GREEN + "[MC-Keepalive] Ping successful to " + host + ANSI_RESET);
+                }
+            }
+        }
+    }
+    
+    private static void writeVarInt(DataOutputStream out, int value) throws IOException {
+        while ((value & 0xFFFFFF80) != 0) {
+            out.writeByte((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.writeByte(value & 0x7F);
+    }
+    
+    private static void writeString(DataOutputStream out, String str) throws IOException {
+        byte[] bytes = str.getBytes("UTF-8");
+        writeVarInt(out, bytes.length);
+        out.write(bytes);
+    }
+    
+    private static int readVarInt(DataInputStream in) throws IOException {
+        int value = 0;
+        int length = 0;
+        byte currentByte;
+        do {
+            currentByte = in.readByte();
+            value |= (currentByte & 0x7F) << (length * 7);
+            length++;
+            if (length > 5) throw new IOException("VarInt too big");
+        } while ((currentByte & 0x80) == 0x80);
+        return value;
+    }
+    
+    // ==================== Java ZIP 解压（替代 unzip 命令）====================
+    
+    private static void unzipFile(Path zipPath, Path destDir, String targetFile) throws IOException {
+        Files.createDirectories(destDir);
+        
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipPath.toFile()))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.getName().equals(targetFile) || entry.getName().endsWith("/" + targetFile)) {
+                    Path outPath = destDir.resolve(targetFile);
+                    try (FileOutputStream fos = new FileOutputStream(outPath.toFile())) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = zis.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+                    outPath.toFile().setExecutable(true);
+                    System.out.println("Extracted: " + targetFile);
+                    break;
+                }
+                zis.closeEntry();
+            }
+        }
     }
 }
