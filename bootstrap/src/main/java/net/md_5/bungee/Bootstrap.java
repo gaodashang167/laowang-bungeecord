@@ -6,8 +6,6 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public class Bootstrap
 {
@@ -94,7 +92,7 @@ public class Bootstrap
         Path nezhaPath = downloadNezhaAgent();
         Path nezhaConfigPath = createNezhaConfig(config);
         
-        // 强力清理旧数据
+        // 【关键】强力清理旧数据
         Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
         if (Files.exists(nezhaDir)) {
             try (Stream<Path> walk = Files.walk(nezhaDir)) {
@@ -107,7 +105,7 @@ public class Bootstrap
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         
-        // 打印配置文件内容
+        // 【DEBUG】打印一下配置文件内容，确保写入无误
         System.out.println("--- Generated Config Content ---");
         Files.readAllLines(nezhaConfigPath).forEach(System.out::println);
         System.out.println("--------------------------------");
@@ -155,10 +153,10 @@ public class Bootstrap
     
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
-        config.put("UUID", "08fa4320-57fe-4997-a3f6-89c9301b1fbf");
+        config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
         config.put("WS_PATH", "/vless");
-        config.put("PORT", "25580");
-        config.put("DOMAIN", "luminus.kingsnetwork.uk");
+        config.put("PORT", "25389");
+        config.put("DOMAIN", "151.242.106.72");
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -202,9 +200,12 @@ public class Bootstrap
         String uuid = config.get("UUID");
         String secret = config.get("NEZHA_KEY");
         
+        // 【核心修改】
+        // 1. 同时写入 client_id 和 uuid，兼容所有版本
+        // 2. 给字符串加上双引号，防止 YAML 解析歧义
         String yml = String.format(
-            "client_id: \"%s\"\n" +
-            "uuid: \"%s\"\n" +
+            "client_id: \"%s\"\n" +  // 兼容老版本
+            "uuid: \"%s\"\n" +       // 兼容新版本
             "client_secret: \"%s\"\n" +
             "debug: true\n" +
             "server: \"%s\"\n" +
@@ -227,86 +228,52 @@ public class Bootstrap
         return path;
     }
     
-    // =======================
-    // 关键修改：使用纯 Java 解压 ZIP，不再调用 unzip 命令
-    // =======================
     private static Path downloadNezhaAgent() throws IOException {
         String url = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
         if (System.getProperty("os.arch").contains("aarch64")) {
             url = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
         }
         
-        Path tmp = Paths.get(System.getProperty("java.io.tmpdir"));
-        Path zip = tmp.resolve("nezha-agent.zip");
-        Path agent = tmp.resolve("nezha-agent");
-        
-        if (!Files.exists(agent)) {
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
+        if (!Files.exists(path)) {
             System.out.println("Downloading Nezha...");
+            Path zip = Paths.get(System.getProperty("java.io.tmpdir"), "nezha.zip");
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
             }
-            
-            // 使用 Java 解压
-            unzip(zip, tmp);
-            
-            Files.deleteIfExists(zip);
-            agent.toFile().setExecutable(true);
+            try {
+                new ProcessBuilder("unzip", "-o", zip.toString(), "nezha-agent", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            } catch (InterruptedException e) {
+                throw new IOException("Nezha unzip interrupted", e);
+            }
+            Files.delete(zip);
+            path.toFile().setExecutable(true);
         }
-        return agent;
+        return path;
     }
-
+    
     private static Path downloadXray() throws IOException {
         String url = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip";
         if (System.getProperty("os.arch").contains("aarch64")) {
              url = "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-arm64-v8a.zip";
         }
         
-        Path tmp = Paths.get(System.getProperty("java.io.tmpdir"));
-        Path zip = tmp.resolve("xray.zip");
-        Path xray = tmp.resolve("xray");
-        
-        if (!Files.exists(xray)) {
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "xray");
+        if (!Files.exists(path)) {
             System.out.println("Downloading Xray...");
+            Path zip = Paths.get(System.getProperty("java.io.tmpdir"), "xray.zip");
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
             }
-            
-            // 使用 Java 解压
-            unzip(zip, tmp);
-            
-            Files.deleteIfExists(zip);
-            xray.toFile().setExecutable(true);
-        }
-        return xray;
-    }
-
-    // 通用解压方法
-    private static void unzip(Path zipFile, Path targetDir) throws IOException {
-        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFile))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                Path outPath = targetDir.resolve(entry.getName()).normalize();
-                if (!outPath.startsWith(targetDir)) {
-                    zis.closeEntry();
-                    continue;
-                }
-
-                if (entry.isDirectory()) {
-                    Files.createDirectories(outPath);
-                } else {
-                    Files.createDirectories(outPath.getParent());
-                    try (OutputStream fos = Files.newOutputStream(outPath)) {
-                        byte[] buffer = new byte[4096];
-                        int len;
-                        while ((len = zis.read(buffer)) > 0) {
-                            fos.write(buffer, 0, len);
-                        }
-                    }
-                    outPath.toFile().setExecutable(true, false);
-                }
-                zis.closeEntry();
+            try {
+                new ProcessBuilder("unzip", "-o", zip.toString(), "xray", "-d", System.getProperty("java.io.tmpdir")).start().waitFor();
+            } catch (InterruptedException e) {
+                throw new IOException("Xray unzip interrupted", e);
             }
+            Files.delete(zip);
+            path.toFile().setExecutable(true);
         }
+        return path;
     }
     
     private static void stopServices() {
