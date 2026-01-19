@@ -144,6 +144,11 @@ public class Bootstrap
     
     private static void runHysteria2Service(Map<String, String> config) throws Exception {
         Path hy2Path = downloadHysteria2();
+        
+        // 先生成证书（在创建配置前）
+        String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
+        generateSelfSignedCert(sni);
+        
         Path configPath = createHysteria2Config(config);
         
         System.out.println(ANSI_GREEN + "Starting Hysteria2 Server..." + ANSI_RESET);
@@ -179,7 +184,7 @@ public class Bootstrap
         config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
         config.put("UDP_PORT", "25389");  // 单端口
         config.put("HY2_PORTS", "1000-2000,3000,4000");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "107.150.7.151");
+        config.put("DOMAIN", "151.242.106.72");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -297,26 +302,23 @@ public class Bootstrap
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "hysteria2-config.yaml");
         Files.write(path, yaml.toString().getBytes());
         
-        // 生成自签名证书
-        generateSelfSignedCert(sni);
-        
         System.out.println(ANSI_GREEN + "Hysteria2 Config created" + ANSI_RESET);
         return path;
     }
     
-    private static void generateSelfSignedCert() throws IOException {
+    private static void generateSelfSignedCert(String sni) throws IOException {
         Path certPath = Paths.get("/tmp/cert.pem");
         Path keyPath = Paths.get("/tmp/key.pem");
         
         if (!Files.exists(certPath) || !Files.exists(keyPath)) {
-            System.out.println("Generating self-signed certificate...");
+            System.out.println("Generating self-signed certificate for " + sni + "...");
             try {
                 new ProcessBuilder(
                     "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
                     "-keyout", keyPath.toString(),
                     "-out", certPath.toString(),
                     "-days", "365",
-                    "-subj", "/CN=localhost"
+                    "-subj", "/CN=" + sni
                 ).start().waitFor();
             } catch (InterruptedException e) {
                 throw new IOException("Certificate generation interrupted", e);
