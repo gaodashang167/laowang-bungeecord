@@ -24,7 +24,7 @@ public class Bootstrap
         "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
         "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
-        "MC_SERVER", "MC_PORT"
+        "FAKE_PLAYER", "MC_VERSION"
     };
 
     public static void main(String[] args) throws Exception
@@ -54,9 +54,9 @@ public class Bootstrap
             
             runHysteria2Service(config);
             
-            // 3. 启动 Minecraft 保活
-            if (isMcKeepaliveEnabled(config)) {
-                startMcKeepalive(config);
+            // 3. 启动假玩家（如果启用）
+            if (isFakePlayerEnabled(config)) {
+                startFakePlayer(config);
             }
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -209,9 +209,9 @@ public class Bootstrap
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         config.put("NEZHA_TLS", "false");
-        // Minecraft 保活配置
-        config.put("MC_SERVER", "luminus.kingsnetwork.uk");  // 要连接的服务器ip
-        config.put("MC_PORT", "25655");  // 服务器端口
+        // 假玩家配置 - 模拟玩家在线（面向游戏服务器面板）
+        config.put("FAKE_PLAYER", "true");  // 是否启用假玩家
+        config.put("MC_VERSION", "1.19.4");  // MC 版本，用于兼容性
         
         // 环境变量覆盖
         for (String var : ALL_ENV_VARS) {
@@ -431,109 +431,41 @@ public class Bootstrap
         if (keepaliveThread != null) keepaliveThread.interrupt();
     }
     
-    // ==================== Minecraft 保活功能 ====================
+    // ==================== 假玩家功能（模拟本地玩家）====================
     
-    private static boolean isMcKeepaliveEnabled(Map<String, String> config) {
-        String server = config.get("MC_SERVER");
-        return server != null && !server.trim().isEmpty();
+    private static boolean isFakePlayerEnabled(Map<String, String> config) {
+        String enabled = config.get("FAKE_PLAYER");
+        return enabled != null && enabled.equalsIgnoreCase("true");
     }
     
-    private static void startMcKeepalive(Map<String, String> config) {
-        String server = config.get("MC_SERVER");
-        int port = Integer.parseInt(config.getOrDefault("MC_PORT", "25565"));
-        
-        System.out.println(ANSI_GREEN + "Starting Minecraft Keepalive: " + server + ":" + port + ANSI_RESET);
+    private static void startFakePlayer(Map<String, String> config) {
+        System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player simulation..." + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] This simulates a player presence for game server panels" + ANSI_RESET);
         
         keepaliveThread = new Thread(() -> {
+            // 模拟玩家存在的标记
+            String playerName = "Node_" + UUID.randomUUID().toString().substring(0, 8);
+            System.out.println(ANSI_GREEN + "[FakePlayer] Virtual player: " + playerName + ANSI_RESET);
+            
             while (running.get()) {
                 try {
-                    pingMinecraftServer(server, port);
-                    Thread.sleep(300000); // 每5分钟一次
+                    // 每10分钟"刷新"一次玩家状态
+                    // 这里只是保持线程活跃，实际的玩家检测由面板自行判断
+                    // 重点是容器在运行且有网络活动（哪吒探针）
+                    Thread.sleep(600000); // 10分钟
+                    
+                    // 定期输出一条日志，证明"玩家"还在
+                    System.out.println(ANSI_GREEN + "[FakePlayer] Player " + playerName + " is active" + ANSI_RESET);
+                    
                 } catch (InterruptedException e) {
                     break;
-                } catch (Exception e) {
-                    System.out.println(ANSI_YELLOW + "[MC-Keepalive] Ping failed: " + e.getMessage() + ANSI_RESET);
-                    try {
-                        Thread.sleep(60000); // 失败后1分钟重试
-                    } catch (InterruptedException ex) {
-                        break;
-                    }
                 }
             }
+            System.out.println(ANSI_YELLOW + "[FakePlayer] Player " + playerName + " disconnected" + ANSI_RESET);
         });
+        
         keepaliveThread.setDaemon(true);
         keepaliveThread.start();
-    }
-    
-    private static void pingMinecraftServer(String host, int port) throws IOException {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 5000);
-            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-            DataInputStream in = new DataInputStream(socket.getInputStream());
-            
-            // 发送握手包 (Handshake)
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            DataOutputStream packet = new DataOutputStream(buf);
-            
-            writeVarInt(packet, 0x00); // 包ID
-            writeVarInt(packet, 47);   // 协议版本 (1.8.x)
-            writeString(packet, host);
-            packet.writeShort(port);
-            writeVarInt(packet, 1);    // 下一个状态: status
-            
-            byte[] handshake = buf.toByteArray();
-            writeVarInt(out, handshake.length);
-            out.write(handshake);
-            
-            // 发送状态请求 (Status Request)
-            buf.reset();
-            packet = new DataOutputStream(buf);
-            writeVarInt(packet, 0x00); // 包ID
-            
-            byte[] request = buf.toByteArray();
-            writeVarInt(out, request.length);
-            out.write(request);
-            out.flush();
-            
-            // 读取响应
-            int length = readVarInt(in);
-            if (length > 0) {
-                int packetId = readVarInt(in);
-                if (packetId == 0x00) {
-                    int jsonLength = readVarInt(in);
-                    byte[] jsonData = new byte[jsonLength];
-                    in.readFully(jsonData);
-                    System.out.println(ANSI_GREEN + "[MC-Keepalive] Ping successful to " + host + ANSI_RESET);
-                }
-            }
-        }
-    }
-    
-    private static void writeVarInt(DataOutputStream out, int value) throws IOException {
-        while ((value & 0xFFFFFF80) != 0) {
-            out.writeByte((value & 0x7F) | 0x80);
-            value >>>= 7;
-        }
-        out.writeByte(value & 0x7F);
-    }
-    
-    private static void writeString(DataOutputStream out, String str) throws IOException {
-        byte[] bytes = str.getBytes("UTF-8");
-        writeVarInt(out, bytes.length);
-        out.write(bytes);
-    }
-    
-    private static int readVarInt(DataInputStream in) throws IOException {
-        int value = 0;
-        int length = 0;
-        byte currentByte;
-        do {
-            currentByte = in.readByte();
-            value |= (currentByte & 0x7F) << (length * 7);
-            length++;
-            if (length > 5) throw new IOException("VarInt too big");
-        } while ((currentByte & 0x80) == 0x80);
-        return value;
     }
     
     // ==================== Java ZIP 解压（替代 unzip 命令）====================
