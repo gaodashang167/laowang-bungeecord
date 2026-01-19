@@ -18,7 +18,8 @@ public class Bootstrap
     private static Process nezhaProcess;
     
     private static final String[] ALL_ENV_VARS = {
-        "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD",
+        "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
+        "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS"
     };
 
@@ -37,8 +38,12 @@ public class Bootstrap
             
             System.out.println(ANSI_GREEN + "\n=== Hysteria2 Configuration ===" + ANSI_RESET);
             System.out.println(ANSI_GREEN + "Password: " + config.get("HY2_PASSWORD") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Obfs Password: " + config.getOrDefault("HY2_OBFS_PASSWORD", "(none)") + ANSI_RESET);
             System.out.println(ANSI_GREEN + "UDP Port: " + config.get("UDP_PORT") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Domain: " + config.get("DOMAIN") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Port Range: " + config.getOrDefault("HY2_PORTS", "(single port)") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Domain/IP: " + config.get("DOMAIN") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "SNI: " + config.getOrDefault("HY2_SNI", "www.bing.com") + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "ALPN: " + config.getOrDefault("HY2_ALPN", "h3") + ANSI_RESET);
             System.out.println(ANSI_GREEN + "\n=== Hysteria2 Node URL ===" + ANSI_RESET);
             System.out.println(ANSI_GREEN + hy2Url + ANSI_RESET);
             System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
@@ -170,9 +175,13 @@ public class Bootstrap
         Map<String, String> config = new HashMap<>();
         // 默认配置
         config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
-        config.put("HY2_PASSWORD", "wocao147");  // Hysteria2 使用密码认证
-        config.put("UDP_PORT", "25389");  // UDP 端口
-        config.put("DOMAIN", "151.242.106.72");
+        config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
+        config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
+        config.put("UDP_PORT", "25389");  // 单端口
+        config.put("HY2_PORTS", "1000-2000,3000,4000");  // 跳跃端口范围（可选）
+        config.put("DOMAIN", "107.150.7.151");
+        config.put("HY2_SNI", "www.bing.com");  // TLS SNI
+        config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
@@ -188,38 +197,108 @@ public class Bootstrap
     
     private static String generateHy2Url(Map<String, String> config) {
         try {
-            // hysteria2://password@domain:port?insecure=1#HY2-Node
+            // hysteria2://password@domain:port?obfs=salamander&obfs-password=xxx&sni=xxx&insecure=1&mport=xxx#Name
+            StringBuilder url = new StringBuilder("hysteria2://");
+            
             String password = URLEncoder.encode(config.get("HY2_PASSWORD"), "UTF-8");
-            return "hysteria2://" + password + "@" + config.get("DOMAIN") + ":" + 
-                   config.get("UDP_PORT") + "?insecure=1#HY2-Node";
+            url.append(password).append("@");
+            url.append(config.get("DOMAIN")).append(":").append(config.get("UDP_PORT"));
+            
+            // 参数部分
+            List<String> params = new ArrayList<>();
+            
+            // 混淆密码（如果有）
+            String obfsPass = config.get("HY2_OBFS_PASSWORD");
+            if (obfsPass != null && !obfsPass.trim().isEmpty()) {
+                params.add("obfs=salamander");
+                params.add("obfs-password=" + URLEncoder.encode(obfsPass, "UTF-8"));
+            }
+            
+            // SNI
+            String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
+            params.add("sni=" + sni);
+            
+            // 跳跃端口
+            String ports = config.get("HY2_PORTS");
+            if (ports != null && !ports.trim().isEmpty()) {
+                params.add("mport=" + URLEncoder.encode(ports, "UTF-8"));
+            }
+            
+            // ALPN
+            String alpn = config.getOrDefault("HY2_ALPN", "h3");
+            params.add("alpn=" + alpn);
+            
+            // 跳过证书验证
+            params.add("insecure=1");
+            
+            if (!params.isEmpty()) {
+                url.append("?").append(String.join("&", params));
+            }
+            
+            url.append("#US-HostPapa");
+            
+            return url.toString();
         } catch (Exception e) { 
+            e.printStackTrace();
             return ""; 
         }
     }
     
     private static Path createHysteria2Config(Map<String, String> config) throws IOException {
-        String yaml = String.format(
-            "listen: :%s\n\n" +
-            "tls:\n" +
-            "  cert: /tmp/cert.pem\n" +
-            "  key: /tmp/key.pem\n\n" +
-            "auth:\n" +
-            "  type: password\n" +
-            "  password: %s\n\n" +
-            "masquerade:\n" +
-            "  type: proxy\n" +
-            "  proxy:\n" +
-            "    url: https://www.bing.com\n" +
-            "    rewriteHost: true\n",
-            config.get("UDP_PORT"),
-            config.get("HY2_PASSWORD")
-        );
+        StringBuilder yaml = new StringBuilder();
+        
+        // 监听配置 - 支持跳跃端口
+        String ports = config.get("HY2_PORTS");
+        if (ports != null && !ports.trim().isEmpty()) {
+            yaml.append("listen: :").append(config.get("UDP_PORT")).append("\n");
+            yaml.append("mport: ").append(ports).append("\n\n");
+        } else {
+            yaml.append("listen: :").append(config.get("UDP_PORT")).append("\n\n");
+        }
+        
+        // TLS 配置
+        String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
+        yaml.append("tls:\n");
+        yaml.append("  cert: /tmp/cert.pem\n");
+        yaml.append("  key: /tmp/key.pem\n");
+        yaml.append("  sni: ").append(sni).append("\n\n");
+        
+        // 认证配置
+        yaml.append("auth:\n");
+        yaml.append("  type: password\n");
+        yaml.append("  password: ").append(config.get("HY2_PASSWORD")).append("\n\n");
+        
+        // 混淆配置（如果启用）
+        String obfsPass = config.get("HY2_OBFS_PASSWORD");
+        if (obfsPass != null && !obfsPass.trim().isEmpty()) {
+            yaml.append("obfs:\n");
+            yaml.append("  type: salamander\n");
+            yaml.append("  salamander:\n");
+            yaml.append("    password: ").append(obfsPass).append("\n\n");
+        }
+        
+        // QUIC 配置
+        yaml.append("quic:\n");
+        yaml.append("  initStreamReceiveWindow: 8388608\n");
+        yaml.append("  maxStreamReceiveWindow: 8388608\n");
+        yaml.append("  initConnReceiveWindow: 20971520\n");
+        yaml.append("  maxConnReceiveWindow: 20971520\n");
+        yaml.append("  maxIdleTimeout: 30s\n");
+        yaml.append("  maxIncomingStreams: 1024\n");
+        yaml.append("  disablePathMTUDiscovery: false\n\n");
+        
+        // 伪装网站
+        yaml.append("masquerade:\n");
+        yaml.append("  type: proxy\n");
+        yaml.append("  proxy:\n");
+        yaml.append("    url: https://").append(sni).append("\n");
+        yaml.append("    rewriteHost: true\n");
         
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "hysteria2-config.yaml");
-        Files.write(path, yaml.getBytes());
+        Files.write(path, yaml.toString().getBytes());
         
         // 生成自签名证书
-        generateSelfSignedCert();
+        generateSelfSignedCert(sni);
         
         System.out.println(ANSI_GREEN + "Hysteria2 Config created" + ANSI_RESET);
         return path;
