@@ -18,13 +18,15 @@ public class Bootstrap
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process hy2Process;
     private static Process nezhaProcess;
+    private static Process minecraftProcess;
     private static Thread keepaliveThread;
     
     private static final String[] ALL_ENV_VARS = {
         "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
         "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
-        "FAKE_PLAYER", "MC_VERSION"
+        "MC_JAR", "MC_MEMORY", "MC_ARGS",
+        "MC_KEEPALIVE_HOST", "MC_KEEPALIVE_PORT"
     };
 
     public static void main(String[] args) throws Exception
@@ -32,12 +34,17 @@ public class Bootstrap
         try {
             Map<String, String> config = loadConfig();
             
-            // 1. 启动哪吒
+            // 1. 启动真实的 Minecraft 服务器（如果配置了）
+            if (isMcServerEnabled(config)) {
+                startMinecraftServer(config);
+            }
+            
+            // 2. 启动哪吒
             if (isNezhaConfigured(config)) {
                 runNezhaAgent(config);
             }
             
-            // 2. 启动 Hysteria2
+            // 3. 启动 Hysteria2
             String hy2Url = generateHy2Url(config);
             
             System.out.println(ANSI_GREEN + "\n=== Hysteria2 Configuration ===" + ANSI_RESET);
@@ -54,9 +61,11 @@ public class Bootstrap
             
             runHysteria2Service(config);
             
-            // 3. 启动假玩家（如果启用）
-            if (isFakePlayerEnabled(config)) {
-                startFakePlayer(config);
+            // 4. 启动 MC 保活（如果启用）
+            if (isMcKeepaliveEnabled(config)) {
+                // 等待 MC 服务器启动完成
+                Thread.sleep(10000);
+                startMcKeepalive(config);
             }
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -197,9 +206,9 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "c27122af-af04-4ebd-a45f-e7d199373c5a");
+        config.put("UUID", "c7eddabd-3aba-4014-8b12-55638bb90714");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
-        config.put("HY2_OBFS_PASSWORD", "laohu-niubi-burang-shibie-2025");  // 【重要】启用混淆增强隐蔽性
+        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2025");  // 【重要】启用混淆增强隐蔽性
         config.put("UDP_PORT", "25839");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
         config.put("DOMAIN", "luminus.kingsnetwork.uk");
@@ -209,9 +218,13 @@ public class Bootstrap
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         config.put("NEZHA_TLS", "false");
-        // 假玩家配置 - 模拟玩家在线（面向游戏服务器面板）
-        config.put("FAKE_PLAYER", "true");  // 是否启用假玩家
-        config.put("MC_VERSION", "1.19.4");  // MC 版本，用于兼容性
+        // Minecraft 服务器配置
+        config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
+        config.put("MC_MEMORY", "1");  // 分配内存
+        config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
+        // Minecraft 保活配置 - 模拟玩家连接
+        config.put("MC_KEEPALIVE_HOST", "127.0.0.1");  // 连接本机 MC 服务器
+        config.put("MC_KEEPALIVE_PORT", "25839");      // MC 服务器端口
         
         // 环境变量覆盖
         for (String var : ALL_ENV_VARS) {
@@ -437,46 +450,215 @@ public class Bootstrap
     }
     
     private static void stopServices() {
+        if (minecraftProcess != null) {
+            System.out.println(ANSI_YELLOW + "Stopping Minecraft Server..." + ANSI_RESET);
+            minecraftProcess.destroy();
+            try {
+                minecraftProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {}
+        }
         if (nezhaProcess != null) nezhaProcess.destroy();
         if (hy2Process != null) hy2Process.destroy();
         if (keepaliveThread != null) keepaliveThread.interrupt();
     }
     
-    // ==================== 假玩家功能（模拟本地玩家）====================
+    // ==================== Minecraft 服务器启动 ====================
     
-    private static boolean isFakePlayerEnabled(Map<String, String> config) {
-        String enabled = config.get("FAKE_PLAYER");
-        return enabled != null && enabled.equalsIgnoreCase("true");
+    private static boolean isMcServerEnabled(Map<String, String> config) {
+        String jarName = config.get("MC_JAR");
+        return jarName != null && !jarName.trim().isEmpty();
     }
     
-    private static void startFakePlayer(Map<String, String> config) {
-        System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player simulation..." + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[FakePlayer] This simulates a player presence for game server panels" + ANSI_RESET);
+    private static void startMinecraftServer(Map<String, String> config) throws Exception {
+        String jarName = config.get("MC_JAR");
+        String memory = config.getOrDefault("MC_MEMORY", "2G");
+        String extraArgs = config.getOrDefault("MC_ARGS", "");
+        
+        // 检查 jar 文件是否存在
+        Path jarPath = Paths.get(jarName);
+        if (!Files.exists(jarPath)) {
+            System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET);
+            System.out.println(ANSI_YELLOW + "[MC-Server] Skipping Minecraft server startup" + ANSI_RESET);
+            return;
+        }
+        
+        System.out.println(ANSI_GREEN + "=== Starting Minecraft Server ===" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "JAR: " + jarName + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Memory: " + memory + ANSI_RESET);
+        
+        // 构建启动命令
+        List<String> cmd = new ArrayList<>();
+        cmd.add("java");
+        cmd.add("-Xms" + memory);
+        cmd.add("-Xmx" + memory);
+        
+        // 添加额外参数
+        if (!extraArgs.trim().isEmpty()) {
+            cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
+        }
+        
+        // 默认优化参数
+        cmd.add("-XX:+UseG1GC");
+        cmd.add("-XX:+ParallelRefProcEnabled");
+        cmd.add("-XX:MaxGCPauseMillis=200");
+        cmd.add("-XX:+UnlockExperimentalVMOptions");
+        cmd.add("-XX:+DisableExplicitGC");
+        cmd.add("-XX:G1NewSizePercent=30");
+        cmd.add("-XX:G1MaxNewSizePercent=40");
+        cmd.add("-XX:G1HeapRegionSize=8M");
+        cmd.add("-XX:G1ReservePercent=20");
+        cmd.add("-XX:G1HeapWastePercent=5");
+        cmd.add("-XX:G1MixedGCCountTarget=4");
+        cmd.add("-XX:InitiatingHeapOccupancyPercent=15");
+        cmd.add("-XX:G1MixedGCLiveThresholdPercent=90");
+        cmd.add("-XX:G1RSetUpdatingPauseTimePercent=5");
+        cmd.add("-XX:SurvivorRatio=32");
+        cmd.add("-XX:+PerfDisableSharedMem");
+        cmd.add("-XX:MaxTenuringThreshold=1");
+        
+        cmd.add("-jar");
+        cmd.add(jarName);
+        cmd.add("nogui");
+        
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        
+        minecraftProcess = pb.start();
+        
+        // 转发 MC 服务器输出
+        new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(minecraftProcess.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println("[MC-Server] " + line);
+                }
+            } catch (IOException e) {}
+        }).start();
+        
+        // 检查是否成功启动
+        Thread.sleep(3000);
+        if (!minecraftProcess.isAlive()) {
+            System.out.println(ANSI_RED + "[MC-Server] Failed to start! Exit code: " + 
+                             minecraftProcess.exitValue() + ANSI_RESET);
+        } else {
+            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully" + ANTML_RESET);
+        }
+    }
+    
+    // ==================== Minecraft 保活功能（模拟玩家）====================
+    
+    private static boolean isMcKeepaliveEnabled(Map<String, String> config) {
+        String host = config.get("MC_KEEPALIVE_HOST");
+        return host != null && !host.trim().isEmpty();
+    }
+    
+    private static void startMcKeepalive(Map<String, String> config) {
+        String host = config.get("MC_KEEPALIVE_HOST");
+        int port = Integer.parseInt(config.getOrDefault("MC_KEEPALIVE_PORT", "25565"));
+        
+        System.out.println(ANSI_GREEN + "[MC-Keepalive] Starting player simulation to " + host + ":" + port + ANSI_RESET);
         
         keepaliveThread = new Thread(() -> {
-            // 模拟玩家存在的标记
-            String playerName = "Node_" + UUID.randomUUID().toString().substring(0, 8);
-            System.out.println(ANSI_GREEN + "[FakePlayer] Virtual player: " + playerName + ANSI_RESET);
-            
+            int failCount = 0;
             while (running.get()) {
                 try {
-                    // 每10分钟"刷新"一次玩家状态
-                    // 这里只是保持线程活跃，实际的玩家检测由面板自行判断
-                    // 重点是容器在运行且有网络活动（哪吒探针）
-                    Thread.sleep(600000); // 10分钟
-                    
-                    // 定期输出一条日志，证明"玩家"还在
-                    System.out.println(ANSI_GREEN + "[FakePlayer] Player " + playerName + " is active" + ANSI_RESET);
-                    
+                    pingMinecraftServer(host, port);
+                    failCount = 0;
+                    System.out.println(ANSI_GREEN + "[MC-Keepalive] ✓ Player ping successful" + ANSI_RESET);
+                    Thread.sleep(300000); // 每5分钟一次
                 } catch (InterruptedException e) {
                     break;
+                } catch (Exception e) {
+                    failCount++;
+                    if (failCount <= 3) {
+                        System.out.println(ANSI_YELLOW + "[MC-Keepalive] Ping failed (" + failCount + "/3): " + e.getMessage() + ANSI_RESET);
+                        if (failCount == 3) {
+                            System.out.println(ANSI_YELLOW + "[MC-Keepalive] Continuing silently..." + ANSI_RESET);
+                        }
+                    }
+                    try {
+                        Thread.sleep(60000); // 失败后1分钟重试
+                    } catch (InterruptedException ex) {
+                        break;
+                    }
                 }
             }
-            System.out.println(ANSI_YELLOW + "[FakePlayer] Player " + playerName + " disconnected" + ANSI_RESET);
         });
-        
         keepaliveThread.setDaemon(true);
         keepaliveThread.start();
+    }
+    
+    private static void pingMinecraftServer(String host, int port) throws IOException {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5000);
+            socket.setSoTimeout(5000);
+            
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            
+            // 发送握手包
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream packet = new DataOutputStream(buf);
+            
+            writeVarInt(packet, 0x00); // 包ID
+            writeVarInt(packet, 47);   // 协议版本
+            writeString(packet, host);
+            packet.writeShort(port);
+            writeVarInt(packet, 1);    // 下一个状态: status
+            
+            byte[] handshake = buf.toByteArray();
+            writeVarInt(out, handshake.length);
+            out.write(handshake);
+            
+            // 发送状态请求
+            buf.reset();
+            packet = new DataOutputStream(buf);
+            writeVarInt(packet, 0x00);
+            
+            byte[] request = buf.toByteArray();
+            writeVarInt(out, request.length);
+            out.write(request);
+            out.flush();
+            
+            // 读取响应
+            int length = readVarInt(in);
+            if (length > 0 && length < 32767) {
+                int packetId = readVarInt(in);
+                if (packetId == 0x00) {
+                    // 成功收到响应
+                    return;
+                }
+            }
+            throw new IOException("Invalid response");
+        }
+    }
+    
+    private static void writeVarInt(DataOutputStream out, int value) throws IOException {
+        while ((value & 0xFFFFFF80) != 0) {
+            out.writeByte((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.writeByte(value & 0x7F);
+    }
+    
+    private static void writeString(DataOutputStream out, String str) throws IOException {
+        byte[] bytes = str.getBytes("UTF-8");
+        writeVarInt(out, bytes.length);
+        out.write(bytes);
+    }
+    
+    private static int readVarInt(DataInputStream in) throws IOException {
+        int value = 0;
+        int length = 0;
+        byte currentByte;
+        do {
+            currentByte = in.readByte();
+            value |= (currentByte & 0x7F) << (length * 7);
+            length++;
+            if (length > 5) throw new IOException("VarInt too big");
+        } while ((currentByte & 0x80) == 0x80);
+        return value;
     }
     
     // ==================== Java ZIP 解压（替代 unzip 命令）====================
