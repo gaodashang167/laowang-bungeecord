@@ -226,7 +226,7 @@ public class Bootstrap
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         config.put("NEZHA_TLS", "false");
         // Minecraft 服务器配置
-        config.put("MC_JAR", "");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
+        config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
         config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
         // Minecraft 保活配置 - 模拟玩家连接
