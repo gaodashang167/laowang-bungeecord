@@ -200,9 +200,9 @@ public class Bootstrap
         config.put("UUID", "c27122af-af04-4ebd-a45f-e7d199373c5a");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "laohu-niubi-burang-shibie-2025");  // 【重要】启用混淆增强隐蔽性
-        config.put("UDP_PORT", "19162");  // 单端口
+        config.put("UDP_PORT", "25839");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "shx-1.sherixx.xyz");
+        config.put("DOMAIN", "luminus.kingsnetwork.uk");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
