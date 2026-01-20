@@ -542,7 +542,7 @@ public class Bootstrap
             System.out.println(ANSI_RED + "[MC-Server] Failed to start! Exit code: " + 
                              minecraftProcess.exitValue() + ANSI_RESET);
         } else {
-            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully" + ANTML_RESET);
+            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully" + ANSI_RESET);
         }
     }
     
