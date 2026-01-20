@@ -63,8 +63,9 @@ public class Bootstrap
             
             // 4. 启动 MC 保活（如果启用）
             if (isMcKeepaliveEnabled(config)) {
-                // 等待 MC 服务器启动完成
-                Thread.sleep(10000);
+                // 等待 MC 服务器完全启动（通常需要 30-60 秒）
+                System.out.println(ANSI_YELLOW + "[MC-Keepalive] Waiting 60s for MC server to start..." + ANSI_RESET);
+                Thread.sleep(60000);
                 startMcKeepalive(config);
             }
             
@@ -487,6 +488,20 @@ public class Bootstrap
             System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET);
             System.out.println(ANSI_YELLOW + "[MC-Server] Skipping Minecraft server startup" + ANSI_RESET);
             return;
+        }
+        
+        // 自动同意 EULA
+        Path eulaPath = Paths.get("eula.txt");
+        if (!Files.exists(eulaPath)) {
+            System.out.println(ANSI_GREEN + "[MC-Server] Creating eula.txt (auto-accepting)" + ANSI_RESET);
+            Files.write(eulaPath, "eula=true".getBytes());
+        } else {
+            // 确保 EULA 已同意
+            String eulaContent = new String(Files.readAllBytes(eulaPath));
+            if (!eulaContent.contains("eula=true")) {
+                System.out.println(ANSI_GREEN + "[MC-Server] Auto-accepting EULA" + ANSI_RESET);
+                Files.write(eulaPath, "eula=true".getBytes());
+            }
         }
         
         System.out.println(ANSI_GREEN + "=== Starting Minecraft Server ===" + ANSI_RESET);
