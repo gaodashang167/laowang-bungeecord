@@ -220,7 +220,7 @@ public class Bootstrap
         config.put("NEZHA_TLS", "false");
         // Minecraft 服务器配置
         config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
-        config.put("MC_MEMORY", "1");  // 分配内存
+        config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
         // Minecraft 保活配置 - 模拟玩家连接
         config.put("MC_KEEPALIVE_HOST", "127.0.0.1");  // 连接本机 MC 服务器
@@ -471,8 +471,15 @@ public class Bootstrap
     
     private static void startMinecraftServer(Map<String, String> config) throws Exception {
         String jarName = config.get("MC_JAR");
-        String memory = config.getOrDefault("MC_MEMORY", "2G");
+        String memory = config.getOrDefault("MC_MEMORY", "512M");  // 明确默认值
         String extraArgs = config.getOrDefault("MC_ARGS", "");
+        
+        // 验证内存格式
+        if (!memory.matches("\\d+[MG]")) {
+            System.out.println(ANSI_RED + "[MC-Server] Invalid memory format: " + memory + ANSI_RESET);
+            System.out.println(ANSI_YELLOW + "[MC-Server] Using default: 512M" + ANSI_RESET);
+            memory = "512M";
+        }
         
         // 检查 jar 文件是否存在
         Path jarPath = Paths.get(jarName);
@@ -497,24 +504,39 @@ public class Bootstrap
             cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
         }
         
-        // 默认优化参数
-        cmd.add("-XX:+UseG1GC");
-        cmd.add("-XX:+ParallelRefProcEnabled");
-        cmd.add("-XX:MaxGCPauseMillis=200");
-        cmd.add("-XX:+UnlockExperimentalVMOptions");
-        cmd.add("-XX:+DisableExplicitGC");
-        cmd.add("-XX:G1NewSizePercent=30");
-        cmd.add("-XX:G1MaxNewSizePercent=40");
-        cmd.add("-XX:G1HeapRegionSize=8M");
-        cmd.add("-XX:G1ReservePercent=20");
-        cmd.add("-XX:G1HeapWastePercent=5");
-        cmd.add("-XX:G1MixedGCCountTarget=4");
-        cmd.add("-XX:InitiatingHeapOccupancyPercent=15");
-        cmd.add("-XX:G1MixedGCLiveThresholdPercent=90");
-        cmd.add("-XX:G1RSetUpdatingPauseTimePercent=5");
-        cmd.add("-XX:SurvivorRatio=32");
-        cmd.add("-XX:+PerfDisableSharedMem");
-        cmd.add("-XX:MaxTenuringThreshold=1");
+        // 根据内存大小选择优化参数
+        int memoryMB = parseMemory(memory);
+        
+        if (memoryMB >= 2048) {
+            // 2GB+ 内存：使用完整优化
+            cmd.add("-XX:+UseG1GC");
+            cmd.add("-XX:+ParallelRefProcEnabled");
+            cmd.add("-XX:MaxGCPauseMillis=200");
+            cmd.add("-XX:+UnlockExperimentalVMOptions");
+            cmd.add("-XX:+DisableExplicitGC");
+            cmd.add("-XX:G1NewSizePercent=30");
+            cmd.add("-XX:G1MaxNewSizePercent=40");
+            cmd.add("-XX:G1HeapRegionSize=8M");
+            cmd.add("-XX:G1ReservePercent=20");
+            cmd.add("-XX:G1HeapWastePercent=5");
+            cmd.add("-XX:G1MixedGCCountTarget=4");
+            cmd.add("-XX:InitiatingHeapOccupancyPercent=15");
+            cmd.add("-XX:G1MixedGCLiveThresholdPercent=90");
+            cmd.add("-XX:G1RSetUpdatingPauseTimePercent=5");
+            cmd.add("-XX:SurvivorRatio=32");
+            cmd.add("-XX:+PerfDisableSharedMem");
+            cmd.add("-XX:MaxTenuringThreshold=1");
+        } else if (memoryMB >= 1024) {
+            // 1GB-2GB：基础 G1GC
+            cmd.add("-XX:+UseG1GC");
+            cmd.add("-XX:MaxGCPauseMillis=200");
+            cmd.add("-XX:+DisableExplicitGC");
+        } else {
+            // <1GB：轻量级配置
+            System.out.println(ANSI_YELLOW + "[MC-Server] Low memory mode (< 1GB)" + ANSI_RESET);
+            cmd.add("-XX:+UseSerialGC");  // 串行GC，内存占用最小
+            cmd.add("-XX:+DisableExplicitGC");
+        }
         
         cmd.add("-jar");
         cmd.add(jarName);
@@ -544,6 +566,18 @@ public class Bootstrap
         } else {
             System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully" + ANSI_RESET);
         }
+    }
+    
+    private static int parseMemory(String memory) {
+        try {
+            memory = memory.toUpperCase().trim();
+            if (memory.endsWith("G")) {
+                return Integer.parseInt(memory.substring(0, memory.length() - 1)) * 1024;
+            } else if (memory.endsWith("M")) {
+                return Integer.parseInt(memory.substring(0, memory.length() - 1));
+            }
+        } catch (Exception e) {}
+        return 1024; // 默认 1GB
     }
     
     // ==================== Minecraft 保活功能（模拟玩家）====================
