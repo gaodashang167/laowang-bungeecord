@@ -197,13 +197,13 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "94054b12-853a-4094-9eac-9ee4496026b6");
+        config.put("UUID", "c27122af-af04-4ebd-a45f-e7d199373c5a");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
-        config.put("HY2_OBFS_PASSWORD", "");  // 混淆密码（可选）
-        config.put("UDP_PORT", "25655");  // 单端口
+        config.put("HY2_OBFS_PASSWORD", "laohu-niubi-burang-shibie-2025");  // 【重要】启用混淆增强隐蔽性
+        config.put("UDP_PORT", "19162");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "luminus.kingsnetwork.uk");
-        config.put("HY2_SNI", "www.bing.com");  // TLS SNI
+        config.put("DOMAIN", "shx-1.sherixx.xyz");
+        config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
@@ -282,7 +282,7 @@ public class Bootstrap
             yaml.append("listen: :").append(config.get("UDP_PORT")).append("\n\n");
         }
         
-        // TLS 配置
+        // TLS 配置 - 伪装成正常 HTTPS 网站
         String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
         yaml.append("tls:\n");
         yaml.append("  cert: /tmp/cert.pem\n");
@@ -294,7 +294,7 @@ public class Bootstrap
         yaml.append("  type: password\n");
         yaml.append("  password: ").append(config.get("HY2_PASSWORD")).append("\n\n");
         
-        // 混淆配置（如果启用）
+        // 混淆配置 - 【关键】增强隐蔽性
         String obfsPass = config.get("HY2_OBFS_PASSWORD");
         if (obfsPass != null && !obfsPass.trim().isEmpty()) {
             yaml.append("obfs:\n");
@@ -303,27 +303,38 @@ public class Bootstrap
             yaml.append("    password: ").append(obfsPass).append("\n\n");
         }
         
-        // QUIC 配置
+        // 带宽限制 - 【重要】模拟正常用户，避免异常流量
+        yaml.append("bandwidth:\n");
+        yaml.append("  up: 100 mbps\n");    // 上传限速
+        yaml.append("  down: 100 mbps\n\n"); // 下载限速
+        
+        // QUIC 配置 - 优化性能和隐蔽性
         yaml.append("quic:\n");
         yaml.append("  initStreamReceiveWindow: 8388608\n");
         yaml.append("  maxStreamReceiveWindow: 8388608\n");
         yaml.append("  initConnReceiveWindow: 20971520\n");
         yaml.append("  maxConnReceiveWindow: 20971520\n");
-        yaml.append("  maxIdleTimeout: 30s\n");
-        yaml.append("  maxIncomingStreams: 1024\n");
+        yaml.append("  maxIdleTimeout: 60s\n");         // 适中的超时
+        yaml.append("  maxIncomingStreams: 256\n");     // 限制并发流
         yaml.append("  disablePathMTUDiscovery: false\n\n");
         
-        // 伪装网站
+        // 【核心】伪装成正常网站 - 非代理流量访问时返回真实网站
         yaml.append("masquerade:\n");
         yaml.append("  type: proxy\n");
         yaml.append("  proxy:\n");
         yaml.append("    url: https://").append(sni).append("\n");
-        yaml.append("    rewriteHost: true\n");
+        yaml.append("    rewriteHost: true\n\n");
+        
+        // ACL 规则 - 可选，限制访问来源
+        yaml.append("acl:\n");
+        yaml.append("  inline:\n");
+        yaml.append("    - reject(all, udp/443)      # 阻止 QUIC 探测\n");
+        yaml.append("    - reject(all, udp/80)       # 阻止异常探测\n");
         
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "hysteria2-config.yaml");
         Files.write(path, yaml.toString().getBytes());
         
-        System.out.println(ANSI_GREEN + "Hysteria2 Config created" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Hysteria2 Config created with stealth features enabled" + ANSI_RESET);
         return path;
     }
     
