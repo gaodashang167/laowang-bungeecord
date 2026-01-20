@@ -64,8 +64,8 @@ public class Bootstrap
             
             // 4. 启动真实假玩家（推荐）
             if (isFakePlayerBotEnabled(config)) {
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting 90s for MC server to fully start..." + ANSI_RESET);
-                Thread.sleep(90000); // 增加到 90 秒
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for MC server to fully start..." + ANSI_RESET);
+                waitForServerReady();
                 startFakePlayerBot(config);
             } 
             // 或者启动简单 MC 保活（备选）
@@ -616,6 +616,26 @@ public class Bootstrap
     }
     
     // ==================== 真实假玩家机器人 ====================
+    
+    private static void waitForServerReady() throws InterruptedException {
+        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status..." + ANSI_RESET);
+        
+        for (int i = 0; i < 60; i++) { // 最多等待 5 分钟（60 次 * 5 秒）
+            try {
+                Thread.sleep(5000); // 每 5 秒检查一次
+                pingMinecraftServer("127.0.0.1", 25565);
+                System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server is ready!" + ANSI_RESET);
+                Thread.sleep(5000); // 额外等待 5 秒确保稳定
+                return;
+            } catch (Exception e) {
+                if (i % 6 == 0) { // 每 30 秒提示一次
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s)" + ANSI_RESET);
+                }
+            }
+        }
+        
+        System.out.println(ANSI_RED + "[FakePlayer] Warning: Server didn't respond after 5 minutes, trying anyway..." + ANSI_RESET);
+    }
     
     private static boolean isFakePlayerBotEnabled(Map<String, String> config) {
         String enabled = config.get("FAKE_PLAYER_ENABLED");
