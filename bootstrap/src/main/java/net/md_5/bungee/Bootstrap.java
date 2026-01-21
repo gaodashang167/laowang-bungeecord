@@ -672,7 +672,7 @@ public class Bootstrap
                     
                     // 连接服务器
                     socket = new Socket();
-                    socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
+                    socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 60000);
                     socket.setSoTimeout(15000);
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ TCP connection established" + ANSI_RESET);
