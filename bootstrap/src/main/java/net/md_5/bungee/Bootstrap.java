@@ -723,6 +723,7 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     long startTime = System.currentTimeMillis();
                     
+                    // 修复：将超时时间从 15s 增加到 60s，因为 1.21 配置包(Registry Data)非常大
                     while (!playPhase && System.currentTimeMillis() - startTime < 60000) {
                         if (in.available() > 0) {
                             // 读取包长度
@@ -818,23 +819,6 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent Login Acknowledged (Packet 0x03)" + ANSI_RESET);
                                         
                                         configPhase = true;
-                                        
-                                        // 【新增】进入 Config 阶段后，立即发送 Client Information (0x00)
-                                        // 这是良好公民表现，告诉服务器语言设置等
-                                        ByteArrayOutputStream clientSettingsBuf = new ByteArrayOutputStream();
-                                        DataOutputStream settings = new DataOutputStream(clientSettingsBuf);
-                                        writeVarInt(settings, 0x00); // Packet ID: Client Information (Serverbound Config 0x00)
-                                        writeString(settings, "en_US"); // Locale
-                                        settings.writeByte(2);          // View Distance
-                                        writeVarInt(settings, 0);       // Chat Mode (Enabled)
-                                        settings.writeBoolean(true);    // Chat Colors
-                                        settings.writeByte(127);        // Skin Parts (All)
-                                        writeVarInt(settings, 1);       // Main Hand (Right)
-                                        settings.writeBoolean(false);   // Text Filtering
-                                        settings.writeBoolean(true);    // Allow Server Listings
-                                        
-                                        sendPacket(out, clientSettingsBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent Client Information (0x00)" + ANSI_RESET);
                                     }
                                 } else if (configPhase) {
                                     // === 配置阶段 (Configuration Phase) ===
@@ -852,8 +836,7 @@ public class Bootstrap
                                         playPhase = true;
                                         
                                     } else if (packetId == 0x04) {
-                                        // 【核心修复】Keep Alive (Clientbound 0x04)
-                                        // 服务器发这个是确保连接没断，必须回！
+                                        // Keep Alive (Clientbound 0x04)
                                         long keepAliveId = packetIn.readLong();
                                         
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
