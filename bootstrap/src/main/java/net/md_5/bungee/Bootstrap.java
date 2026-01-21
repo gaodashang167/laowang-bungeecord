@@ -784,33 +784,45 @@ public class Bootstrap
                                     }
                                     break;
                                     
-                                } else if (packetId == 0x03 && !compressionEnabled) {
-                                    // 压缩设置包
-                                    compressionThreshold = readVarInt(packetIn);
-                                    compressionEnabled = compressionThreshold >= 0;
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
-                                    
-                                    configPhase = true;
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Entering configuration phase" + ANSI_RESET);
-                                    
-                                } else if (packetId == 0x03 && configPhase) {
-                                    // 【修复点】MC 1.21+ Server Finish Configuration 的包 ID 是 0x03
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server requests configuration finish (Packet 0x03)" + ANSI_RESET);
-                                    
-                                    // 发送确认配置包 (Acknowledge Finish Configuration) - 1.21+ 只需要这一个
-                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                    DataOutputStream ack = new DataOutputStream(ackBuf);
-                                    writeVarInt(ack, 0x03); // Acknowledge Configuration
-                                    sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished (Sent Ack 0x03)" + ANSI_RESET);
-                                    // 之后会自动等待进入 Play 阶段的包 (0x2B 等)
-                                    
-                                } else if (packetId == 0x2B || packetId == 0x28 || packetId == 0x29) {
-                                    // Play Phase 开始
-                                    playPhase = true;
-                                    failCount = 0;
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓✓✓ " + playerName + " successfully entered the game!" + ANSI_RESET);
+                                } else if (!configPhase && !playPhase) {
+                                    // === 登录阶段 (Login Phase) ===
+                                    if (packetId == 0x03) {
+                                        // Set Compression (包 0x03)
+                                        compressionThreshold = readVarInt(packetIn);
+                                        compressionEnabled = compressionThreshold >= 0;
+                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
+                                    } else if (packetId == 0x02) {
+                                        // Login Success (包 0x02)
+                                        // 注意：这里我们不解析具体内容，只是作为一个信号
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success (Packet 0x02)" + ANSI_RESET);
+                                        
+                                        // 【关键修复】发送 Login Acknowledged (包 0x03)
+                                        // 这是 1.20.2+ 必须的步骤，告诉服务器我们准备好进入配置阶段了
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x03); 
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent Login Acknowledged (Packet 0x03)" + ANSI_RESET);
+                                        
+                                        // 只有发送确认后，才切换到配置阶段
+                                        configPhase = true;
+                                    }
+                                } else if (configPhase) {
+                                    // === 配置阶段 (Configuration Phase) ===
+                                    if (packetId == 0x03) {
+                                        // Finish Configuration (包 0x03)
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server requests configuration finish (Packet 0x03)" + ANSI_RESET);
+                                        
+                                        // 发送 Acknowledge Finish Configuration (包 0x03)
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x03); 
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished. Switching to Play." + ANSI_RESET);
+                                        playPhase = true;
+                                    }
+                                    // 忽略其他配置包 (如 Registry Data 0x07, Tags 0x0D 等)
                                 }
                             }
                         }
