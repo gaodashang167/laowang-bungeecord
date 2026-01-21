@@ -673,7 +673,8 @@ public class Bootstrap
                     // 连接服务器
                     socket = new Socket();
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(15000);
+                    // 修复: 增加 Socket 超时时间，因为阻塞式读取需要
+                    socket.setSoTimeout(30000);
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ TCP connection established" + ANSI_RESET);
                     
@@ -871,70 +872,73 @@ public class Bootstrap
                     System.out.println(ANSI_GREEN + "[FakePlayer] Keeping connection alive (Play Phase)..." + ANSI_RESET);
                     long lastActivity = System.currentTimeMillis();
                     
-                    // 【重写】Play Phase 循环 - 解析包以回复 KeepAlive
+                    // 【重写】Play Phase 循环 - 改为阻塞式读取，更稳定
                     while (running.get() && !socket.isClosed()) {
                         try {
-                            if (in.available() > 0) {
-                                int packetLength = readVarInt(in);
-                                if (packetLength > 0 && packetLength < 2097152) { // 2MB max
+                            // 阻塞读取 VarInt (包长)，SocketTimeout 会在这里生效
+                            int packetLength = readVarInt(in);
+                            
+                            // 读取完整包体
+                            byte[] packetData;
+                            if (compressionEnabled) {
+                                int dataLength = readVarInt(in);
+                                int compressedLength = packetLength - getVarIntSize(dataLength);
+                                
+                                if (dataLength == 0) {
+                                    // 未压缩
+                                    packetData = new byte[compressedLength];
+                                    in.readFully(packetData);
+                                } else {
+                                    // 解压
+                                    byte[] compressedData = new byte[compressedLength];
+                                    in.readFully(compressedData);
                                     
-                                    byte[] packetData;
-                                    if (compressionEnabled) {
-                                        int dataLength = readVarInt(in);
-                                        int compressedLength = packetLength - getVarIntSize(dataLength);
-                                        if (dataLength == 0) {
-                                            packetData = new byte[compressedLength];
-                                            in.readFully(packetData);
-                                        } else {
-                                            byte[] compressedData = new byte[compressedLength];
-                                            in.readFully(compressedData);
-                                            java.util.zip.Inflater inflater = new java.util.zip.Inflater();
-                                            inflater.setInput(compressedData);
-                                            packetData = new byte[dataLength];
-                                            inflater.inflate(packetData);
-                                            inflater.end();
-                                        }
-                                    } else {
-                                        packetData = new byte[packetLength];
-                                        in.readFully(packetData);
-                                    }
-                                    
-                                    // 解析 Play Packet ID
-                                    ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
-                                    DataInputStream packetIn = new DataInputStream(packetStream);
-                                    int packetId = readVarInt(packetIn);
-                                    
-                                    // 处理 Keep Alive
-                                    // 1.21.1: Clientbound 0x24, Serverbound 0x15
-                                    // 1.21.4: Clientbound 0x26, Serverbound 0x18
-                                    if (packetId == 0x24 || packetId == 0x26) {
-                                        long keepAliveId = packetIn.readLong();
-                                        // System.out.println(ANSI_GREEN + "[FakePlayer] Play Keep Alive received (ID: " + Integer.toHexString(packetId) + ")" + ANSI_RESET);
-                                        
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        
-                                        // 回复逻辑：根据收到的包ID猜测版本
-                                        if (packetId == 0x24) {
-                                            writeVarInt(bufOut, 0x15); // 1.21.1 Serverbound Keep Alive
-                                        } else {
-                                            writeVarInt(bufOut, 0x18); // 1.21.4 Serverbound Keep Alive
-                                        }
-                                        bufOut.writeLong(keepAliveId);
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    }
+                                    java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                                    inflater.setInput(compressedData);
+                                    packetData = new byte[dataLength];
+                                    inflater.inflate(packetData);
+                                    inflater.end();
                                 }
-                                lastActivity = System.currentTimeMillis();
+                            } else {
+                                packetData = new byte[packetLength];
+                                in.readFully(packetData);
                             }
                             
-                            // 每 30 秒检查连接
-                            if (System.currentTimeMillis() - lastActivity > 30000) {
-                                System.out.println(ANSI_RED + "[FakePlayer] Timeout: No packets from server for 30s" + ANSI_RESET);
-                                break; 
+                            lastActivity = System.currentTimeMillis();
+                            
+                            // 解析包
+                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
+                            DataInputStream packetIn = new DataInputStream(packetStream);
+                            int packetId = readVarInt(packetIn);
+                            
+                            // 处理 Keep Alive
+                            // 1.21.1: Clientbound 0x24, Serverbound 0x15
+                            // 1.21.4: Clientbound 0x26, Serverbound 0x18
+                            if (packetId == 0x24 || packetId == 0x26) {
+                                long keepAliveId = packetIn.readLong();
+                                
+                                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                DataOutputStream bufOut = new DataOutputStream(buf);
+                                
+                                if (packetId == 0x24) {
+                                    writeVarInt(bufOut, 0x15); // 1.21.1 Serverbound Keep Alive
+                                } else {
+                                    writeVarInt(bufOut, 0x18); // 1.21.4 Serverbound Keep Alive
+                                }
+                                bufOut.writeLong(keepAliveId);
+                                sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                             }
-                            Thread.sleep(20);
+                            
+                        } catch (SocketTimeoutException e) {
+                             // 超时是正常的（如果服务器不说话），检查一下是否真的断了
+                             if (System.currentTimeMillis() - lastActivity > 40000) {
+                                 System.out.println(ANSI_RED + "[FakePlayer] Timeout: No packets from server for 40s" + ANSI_RESET);
+                                 break;
+                             }
+                             continue;
                         } catch (Exception e) {
-                            break;
+                             System.out.println(ANSI_RED + "[FakePlayer] Error in Play Loop: " + e.toString() + ANSI_RESET);
+                             break;
                         }
                     }
                     
