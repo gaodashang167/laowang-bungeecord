@@ -837,3 +837,286 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished. Switching to Play." + ANSI_RESET);
                                         playPhase = true;
                                     }
+                                    // 忽略其他配置包
+                                }
+                            }
+                        }
+                        Thread.sleep(50);
+                    }
+                    
+                    if (!playPhase) {
+                        throw new IOException("Failed to complete login/configuration phase");
+                    }
+                    
+                    // 6. 保持连接活跃
+                    System.out.println(ANSI_GREEN + "[FakePlayer] Keeping connection alive..." + ANSI_RESET);
+                    long lastActivity = System.currentTimeMillis();
+                    
+                    while (running.get() && !socket.isClosed()) {
+                        try {
+                            if (in.available() > 0) {
+                                int length = readVarInt(in);
+                                if (length > 0 && length < 1048576) {
+                                    in.skipBytes(length);
+                                }
+                                lastActivity = System.currentTimeMillis();
+                            }
+                            
+                            // 每 30 秒检查连接
+                            if (System.currentTimeMillis() - lastActivity > 30000) {
+                                break; // 超时，重连
+                            }
+                            
+                            Thread.sleep(500);
+                        } catch (Exception e) {
+                            break;
+                        }
+                    }
+                    
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Connection closed, reconnecting in 5s..." + ANSI_RESET);
+                    Thread.sleep(5000);
+                    
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    failCount++;
+                    if (failCount <= 5) {
+                        System.out.println(ANSI_YELLOW + "[FakePlayer] Failed (" + failCount + "/5): " + e.getMessage() + ANSI_RESET);
+                    }
+                    
+                    try {
+                        if (failCount < 3) {
+                            Thread.sleep(10000);  // 前几次失败快速重试
+                        } else {
+                            Thread.sleep(30000);  // 多次失败后降低频率
+                        }
+                    } catch (InterruptedException ex) {
+                        break;
+                    }
+                } finally {
+                    if (socket != null) {
+                        try { socket.close(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+        });
+        
+        keepaliveThread.setDaemon(true);
+        keepaliveThread.start();
+    }
+    
+    private static int getVarIntSize(int value) {
+        int size = 0;
+        do {
+            size++;
+            value >>>= 7;
+        } while (value != 0);
+        return size;
+    }
+    
+    // 发送数据包（支持压缩）
+    private static void sendPacket(DataOutputStream out, byte[] packet, boolean compress, int threshold) throws IOException {
+        if (!compress || packet.length < threshold) {
+            // 不压缩：格式 = [包长度][数据长度=0][原始数据]
+            // 在压缩模式下，即使不压缩也要发送数据长度字段
+            if (compress) {
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                DataOutputStream bufOut = new DataOutputStream(buf);
+                writeVarInt(bufOut, 0); // 数据长度 = 0 表示未压缩
+                bufOut.write(packet);
+                
+                byte[] finalPacket = buf.toByteArray();
+                writeVarInt(out, finalPacket.length);
+                out.write(finalPacket);
+            } else {
+                // 完全没有压缩模式
+                writeVarInt(out, packet.length);
+                out.write(packet);
+            }
+        } else {
+            // 压缩数据：格式 = [包长度][原始数据长度][压缩后的数据]
+            byte[] compressedData = compressData(packet);
+            
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream bufOut = new DataOutputStream(buf);
+            writeVarInt(bufOut, packet.length); // 原始长度
+            bufOut.write(compressedData);        // 压缩数据
+            
+            byte[] finalPacket = buf.toByteArray();
+            writeVarInt(out, finalPacket.length); // 总长度
+            out.write(finalPacket);
+        }
+        out.flush();
+    }
+    
+    private static byte[] compressData(byte[] data) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(data);
+        deflater.finish();
+        
+        byte[] buffer = new byte[1024];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buffer);
+            out.write(buffer, 0, count);
+        }
+        deflater.end();
+        return out.toByteArray();
+    }
+    
+    // ==================== Minecraft 保活功能（模拟玩家 Ping）====================
+    
+    private static boolean isMcKeepaliveEnabled(Map<String, String> config) {
+        String host = config.get("MC_KEEPALIVE_HOST");
+        return host != null && !host.trim().isEmpty();
+    }
+    
+    private static void startMcKeepalive(Map<String, String> config) {
+        String host = config.get("MC_KEEPALIVE_HOST");
+        int port = Integer.parseInt(config.getOrDefault("MC_KEEPALIVE_PORT", "25565"));
+        
+        System.out.println(ANSI_GREEN + "[MC-Keepalive] Starting player simulation to " + host + ":" + port + ANSI_RESET);
+        
+        keepaliveThread = new Thread(() -> {
+            int failCount = 0;
+            while (running.get()) {
+                try {
+                    pingMinecraftServer(host, port);
+                    failCount = 0;
+                    System.out.println(ANSI_GREEN + "[MC-Keepalive] ✓ Player ping successful" + ANSI_RESET);
+                    Thread.sleep(300000); // 每5分钟一次
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    failCount++;
+                    if (failCount <= 3) {
+                        System.out.println(ANSI_YELLOW + "[MC-Keepalive] Ping failed (" + failCount + "/3): " + e.getMessage() + ANSI_RESET);
+                        if (failCount == 3) {
+                            System.out.println(ANSI_YELLOW + "[MC-Keepalive] Continuing silently..." + ANSI_RESET);
+                        }
+                    }
+                    try {
+                        Thread.sleep(60000); // 失败后1分钟重试
+                    } catch (InterruptedException ex) {
+                        break;
+                    }
+                }
+            }
+        });
+        keepaliveThread.setDaemon(true);
+        keepaliveThread.start();
+    }
+    
+    private static void pingMinecraftServer(String host, int port) throws IOException {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5000);
+            socket.setSoTimeout(5000);
+            
+            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+            DataInputStream in = new DataInputStream(socket.getInputStream());
+            
+            // 发送握手包
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream packet = new DataOutputStream(buf);
+            
+            writeVarInt(packet, 0x00); // 包ID
+            writeVarInt(packet, 47);   // 协议版本
+            writeString(packet, host);
+            packet.writeShort(port);
+            writeVarInt(packet, 1);    // 下一个状态: status
+            
+            byte[] handshake = buf.toByteArray();
+            writeVarInt(out, handshake.length);
+            out.write(handshake);
+            
+            // 发送状态请求
+            buf.reset();
+            packet = new DataOutputStream(buf);
+            writeVarInt(packet, 0x00);
+            
+            byte[] request = buf.toByteArray();
+            writeVarInt(out, request.length);
+            out.write(request);
+            out.flush();
+            
+            // 读取响应 - 修复：正确读取并验证
+            try {
+                int length = readVarInt(in);
+                if (length > 0 && length < 32767) {
+                    int packetId = readVarInt(in);
+                    if (packetId == 0x00) {
+                        int jsonLength = readVarInt(in);
+                        if (jsonLength > 0 && jsonLength < 32767) {
+                            // 成功收到有效响应
+                            return;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // 可能是读取超时或其他问题
+            }
+            
+            throw new IOException("Invalid or no response from server");
+        }
+    }
+    
+    private static void writeVarInt(DataOutputStream out, int value) throws IOException {
+        while ((value & 0xFFFFFF80) != 0) {
+            out.writeByte((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.writeByte(value & 0x7F);
+    }
+    
+    private static void writeString(DataOutputStream out, String str) throws IOException {
+        byte[] bytes = str.getBytes("UTF-8");
+        writeVarInt(out, bytes.length);
+        out.write(bytes);
+    }
+    
+    private static String readString(DataInputStream in) throws IOException {
+        int len = readVarInt(in);
+        byte[] bytes = new byte[len];
+        in.readFully(bytes);
+        return new String(bytes, "UTF-8");
+    }
+
+    private static int readVarInt(DataInputStream in) throws IOException {
+        int value = 0;
+        int length = 0;
+        byte currentByte;
+        do {
+            currentByte = in.readByte();
+            value |= (currentByte & 0x7F) << (length * 7);
+            length++;
+            if (length > 5) throw new IOException("VarInt too big");
+        } while ((currentByte & 0x80) == 0x80);
+        return value;
+    }
+    
+    // ==================== Java ZIP 解压（替代 unzip 命令）====================
+    
+    private static void unzipFile(Path zipPath, Path destDir, String targetFile) throws IOException {
+        Files.createDirectories(destDir);
+        
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipPath.toFile()))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.getName().equals(targetFile) || entry.getName().endsWith("/" + targetFile)) {
+                    Path outPath = destDir.resolve(targetFile);
+                    try (FileOutputStream fos = new FileOutputStream(outPath.toFile())) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = zis.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+                    outPath.toFile().setExecutable(true);
+                    System.out.println("Extracted: " + targetFile);
+                    break;
+                }
+                zis.closeEntry();
+            }
+        }
+    }
+}
