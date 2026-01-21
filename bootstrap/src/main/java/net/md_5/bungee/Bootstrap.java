@@ -212,6 +212,7 @@ public class Bootstrap
     
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
+
         // 默认配置
         config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
@@ -681,11 +682,11 @@ public class Bootstrap
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(socket.getInputStream());
                     
-                    // 握手包 - 使用协议版本 767 (MC 1.21.x)
+                    // 握手包 - 使用协议版本 774 (MC 1.21.11)
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);  // 包ID: Handshake
-                    writeVarInt(handshake, 767);   // 协议版本 767 for 1.21+
+                    writeVarInt(handshake, 774);   // 协议版本 774 for 1.21.11
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2);     // 下一个状态: Login
@@ -695,7 +696,7 @@ public class Bootstrap
                     out.write(handshakeData);
                     out.flush();
                     
-                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent handshake (protocol 767)" + ANSI_RESET);
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent handshake (protocol 774 for 1.21.11)" + ANSI_RESET);
                     
                     // 登录开始包
                     ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
