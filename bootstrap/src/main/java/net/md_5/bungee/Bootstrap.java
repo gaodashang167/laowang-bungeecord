@@ -25,7 +25,7 @@ public class Bootstrap
         "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
         "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
-        "MC_JAR", "MC_MEMORY", "MC_ARGS",
+        "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT",
         "MC_KEEPALIVE_HOST", "MC_KEEPALIVE_PORT",
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
@@ -226,9 +226,10 @@ public class Bootstrap
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         config.put("NEZHA_TLS", "false");
         // Minecraft 服务器配置
-        config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
+        config.put("MC_JAR", "");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
         config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
+        config.put("MC_PORT", "25389");  // MC 服务器端口（从环境变量读取）
         // Minecraft 保活配置 - 模拟玩家连接
         config.put("MC_KEEPALIVE_HOST", "");  // 留空禁用简单 ping
         config.put("MC_KEEPALIVE_PORT", "25389");
@@ -618,7 +619,16 @@ public class Bootstrap
     // ==================== 真实假玩家机器人 ====================
     
     private static void waitForServerReady() throws InterruptedException {
-        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status every 5s..." + ANSI_RESET);
+        // 从配置中读取 MC 端口
+        int mcPort = 25389; // 默认值
+        try {
+            String portEnv = System.getenv("MC_PORT");
+            if (portEnv != null && !portEnv.isEmpty()) {
+                mcPort = Integer.parseInt(portEnv);
+            }
+        } catch (Exception e) {}
+        
+        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status on port " + mcPort + " every 5s..." + ANSI_RESET);
         
         for (int i = 0; i < 60; i++) { // 最多等待 5 分钟
             try {
@@ -626,8 +636,8 @@ public class Bootstrap
                 
                 // 简单的连接测试
                 try (Socket testSocket = new Socket()) {
-                    testSocket.connect(new InetSocketAddress("127.0.0.1", 25565), 3000);
-                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port is open!" + ANSI_RESET);
+                    testSocket.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port " + mcPort + " is open!" + ANSI_RESET);
                     Thread.sleep(10000); // 端口开了后再等 10 秒让服务器稳定
                     return;
                 }
@@ -648,8 +658,10 @@ public class Bootstrap
     
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
+        int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25389"));
         
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
         System.out.println(ANSI_YELLOW + "[FakePlayer] NOTE: Server must be in offline mode (online-mode=false)" + ANSI_RESET);
         
         keepaliveThread = new Thread(() -> {
@@ -657,11 +669,11 @@ public class Bootstrap
             while (running.get()) {
                 Socket socket = null;
                 try {
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Attempting to connect..." + ANSI_RESET);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Attempting to connect to port " + mcPort + "..." + ANSI_RESET);
                     
                     // 连接服务器
                     socket = new Socket();
-                    socket.connect(new InetSocketAddress("127.0.0.1", 25565), 5000);
+                    socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(15000);
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ TCP connection established" + ANSI_RESET);
@@ -675,7 +687,7 @@ public class Bootstrap
                     writeVarInt(handshake, 0x00);  // 包ID: Handshake
                     writeVarInt(handshake, 767);   // 协议版本 767 for 1.21+
                     writeString(handshake, "127.0.0.1");
-                    handshake.writeShort(25565);
+                    handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2);     // 下一个状态: Login
                     
                     byte[] handshakeData = handshakeBuf.toByteArray();
