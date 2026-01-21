@@ -723,7 +723,6 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     long startTime = System.currentTimeMillis();
                     
-                    // 修复：将超时时间从 15s 增加到 60s，因为 1.21 配置包(Registry Data)非常大
                     while (!playPhase && System.currentTimeMillis() - startTime < 60000) {
                         if (in.available() > 0) {
                             // 读取包长度
@@ -770,8 +769,6 @@ public class Bootstrap
                                 DataInputStream packetIn = new DataInputStream(packetStream);
                                 int packetId = readVarInt(packetIn);
                                 
-                                // System.out.println(ANSI_YELLOW + "[FakePlayer] Packet ID: 0x" + Integer.toHexString(packetId) + " (length: " + packetLength + ")" + ANSI_RESET);
-                                
                                 if (packetId == 0x00) {
                                     // 断开连接包
                                     int remaining = packetData.length - getVarIntSize(packetId);
@@ -794,13 +791,12 @@ public class Bootstrap
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
                                         
                                     } else if (packetId == 0x04) {
-                                        // 【修复关键点】Login Plugin Request (包 0x04)
-                                        // 服务器在询问是否支持某些 Mod/特性，必须回复才能继续
+                                        // Login Plugin Request (包 0x04)
                                         int messageId = readVarInt(packetIn);
-                                        String channel = readString(packetIn); // 读取频道名称，如 velocity:player_info
+                                        String channel = readString(packetIn);
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Login Plugin Request: " + channel + " (ID=" + messageId + ")" + ANSI_RESET);
                                         
-                                        // 回复 Login Plugin Response (0x02) - 告诉服务器我们不支持该特性 (success=false)
+                                        // 回复 Not Supported (0x02)
                                         ByteArrayOutputStream respBuf = new ByteArrayOutputStream();
                                         DataOutputStream resp = new DataOutputStream(respBuf);
                                         writeVarInt(resp, 0x02); // Login Plugin Response
@@ -822,6 +818,23 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent Login Acknowledged (Packet 0x03)" + ANSI_RESET);
                                         
                                         configPhase = true;
+                                        
+                                        // 【新增】进入 Config 阶段后，立即发送 Client Information (0x00)
+                                        // 这是良好公民表现，告诉服务器语言设置等
+                                        ByteArrayOutputStream clientSettingsBuf = new ByteArrayOutputStream();
+                                        DataOutputStream settings = new DataOutputStream(clientSettingsBuf);
+                                        writeVarInt(settings, 0x00); // Packet ID: Client Information (Serverbound Config 0x00)
+                                        writeString(settings, "en_US"); // Locale
+                                        settings.writeByte(2);          // View Distance
+                                        writeVarInt(settings, 0);       // Chat Mode (Enabled)
+                                        settings.writeBoolean(true);    // Chat Colors
+                                        settings.writeByte(127);        // Skin Parts (All)
+                                        writeVarInt(settings, 1);       // Main Hand (Right)
+                                        settings.writeBoolean(false);   // Text Filtering
+                                        settings.writeBoolean(true);    // Allow Server Listings
+                                        
+                                        sendPacket(out, clientSettingsBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent Client Information (0x00)" + ANSI_RESET);
                                     }
                                 } else if (configPhase) {
                                     // === 配置阶段 (Configuration Phase) ===
@@ -837,9 +850,31 @@ public class Bootstrap
                                         
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished. Switching to Play." + ANSI_RESET);
                                         playPhase = true;
-                                    } else {
-                                        // 打印被忽略的包（用于调试）
-                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Config packet received: 0x" + Integer.toHexString(packetId) + ANSI_RESET);
+                                        
+                                    } else if (packetId == 0x04) {
+                                        // 【核心修复】Keep Alive (Clientbound 0x04)
+                                        // 服务器发这个是确保连接没断，必须回！
+                                        long keepAliveId = packetIn.readLong();
+                                        
+                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                        DataOutputStream bufOut = new DataOutputStream(buf);
+                                        writeVarInt(bufOut, 0x04); // Serverbound Keep Alive (0x04)
+                                        bufOut.writeLong(keepAliveId);
+                                        
+                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        // 不打印日志了，免得刷屏
+                                        
+                                    } else if (packetId == 0x0E) {
+                                        // Known Packs (Clientbound 0x0E)
+                                        // 必须回复 Serverbound Known Packs (0x07)
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] Received Known Packs (0x0E), sending empty response..." + ANSI_RESET);
+                                        
+                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                        DataOutputStream bufOut = new DataOutputStream(buf);
+                                        writeVarInt(bufOut, 0x07); // Serverbound Known Packs (0x07)
+                                        writeVarInt(bufOut, 0);    // Count = 0
+                                        
+                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 }
                             }
