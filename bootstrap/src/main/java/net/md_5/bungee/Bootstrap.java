@@ -216,7 +216,7 @@ public class Bootstrap
         // 默认配置
         config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
-        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2025");  // 【重要】启用混淆增强隐蔽性
+        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");  // 【重要】启用混淆增强隐蔽性
         config.put("UDP_PORT", "25389");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
         config.put("DOMAIN", "151.242.106.72");
