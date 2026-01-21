@@ -212,6 +212,7 @@ public class Bootstrap
     
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
+        // 默认配置
         config.put("UUID", "60cfb1d3-db11-4eae-9fa3-f04fba55576d");
         config.put("HY2_PASSWORD", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");  // 【重要】启用混淆增强隐蔽性
@@ -719,6 +720,8 @@ public class Bootstrap
                     // 等待并处理服务器响应
                     boolean configPhase = false;
                     boolean playPhase = false;
+                    boolean compressionEnabled = false;
+                    int compressionThreshold = -1;
                     long startTime = System.currentTimeMillis();
                     
                     while (!playPhase && System.currentTimeMillis() - startTime < 15000) {
@@ -731,50 +734,78 @@ public class Bootstrap
                                 
                                 if (packetId == 0x00) {
                                     // 断开连接包
-                                    int reasonLength = readVarInt(in);
-                                    if (reasonLength > 0 && reasonLength < 32767) {
-                                        byte[] reasonBytes = new byte[reasonLength];
-                                        in.readFully(reasonBytes);
-                                        String reason = new String(reasonBytes, "UTF-8");
+                                    int remaining = length - getVarIntSize(packetId);
+                                    byte[] data = new byte[remaining];
+                                    in.readFully(data);
+                                    try {
+                                        String reason = new String(data, "UTF-8");
                                         System.out.println(ANSI_RED + "[FakePlayer] Disconnected: " + reason + ANSI_RESET);
+                                    } catch (Exception e) {
+                                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected (binary data)" + ANSI_RESET);
                                     }
                                     break;
-                                } else if (packetId == 0x03) {
-                                    // 进入配置阶段 (Configuration Phase)
+                                } else if (packetId == 0x03 && !configPhase) {
+                                    // 进入配置阶段 - 可能包含压缩设置
+                                    int remaining = length - getVarIntSize(packetId);
+                                    
+                                    // 检查是否包含压缩阈值
+                                    if (remaining > 0) {
+                                        // 可能是压缩设置包，读取阈值
+                                        try {
+                                            compressionThreshold = readVarInt(in);
+                                            remaining -= getVarIntSize(compressionThreshold);
+                                            compressionEnabled = compressionThreshold >= 0;
+                                            if (compressionEnabled) {
+                                                System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
+                                            }
+                                        } catch (Exception e) {
+                                            // 不是压缩包，跳过
+                                        }
+                                    }
+                                    
+                                    if (remaining > 0) in.skipBytes(remaining);
+                                    
                                     configPhase = true;
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Entering configuration phase" + ANSI_RESET);
                                     
-                                    // 发送确认进入配置阶段
-                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                    DataOutputStream ack = new DataOutputStream(ackBuf);
-                                    writeVarInt(ack, 0x03); // Configuration Acknowledged
+                                    // 延迟发送确认，等待可能的压缩包
+                                    Thread.sleep(100);
                                     
-                                    byte[] ackData = ackBuf.toByteArray();
-                                    writeVarInt(out, ackData.length);
-                                    out.write(ackData);
-                                    out.flush();
+                                } else if (packetId == 0x03 && configPhase) {
+                                    // 压缩设置包（在配置阶段）
+                                    compressionThreshold = readVarInt(in);
+                                    compressionEnabled = compressionThreshold >= 0;
+                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Compression threshold set: " + compressionThreshold + ANSI_RESET);
                                     
                                     // 跳过剩余数据
-                                    int remaining = length - getVarIntSize(packetId);
+                                    int remaining = length - getVarIntSize(packetId) - getVarIntSize(compressionThreshold);
                                     if (remaining > 0) in.skipBytes(remaining);
+                                    
                                 } else if (packetId == 0x02 && configPhase) {
                                     // 服务器要求完成配置
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration complete" + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server ready for configuration finish" + ANSI_RESET);
+                                    
+                                    // 发送确认进入配置阶段（如果还没发）
+                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                    DataOutputStream ack = new DataOutputStream(ackBuf);
+                                    writeVarInt(ack, 0x03); // Acknowledge Configuration
+                                    
+                                    sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
                                     // 发送完成确认
                                     ByteArrayOutputStream finishBuf = new ByteArrayOutputStream();
                                     DataOutputStream finish = new DataOutputStream(finishBuf);
                                     writeVarInt(finish, 0x02); // Finish Configuration
                                     
-                                    byte[] finishData = finishBuf.toByteArray();
-                                    writeVarInt(out, finishData.length);
-                                    out.write(finishData);
-                                    out.flush();
+                                    sendPacket(out, finishBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration acknowledged" + ANSI_RESET);
                                     
                                     // 跳过剩余数据
                                     int remaining = length - getVarIntSize(packetId);
                                     if (remaining > 0) in.skipBytes(remaining);
-                                } else if (packetId == 0x2B || packetId == 0x28) {
+                                    
+                                } else if (packetId == 0x2B || packetId == 0x28 || packetId == 0x29) {
                                     // Login Success / Play Phase 开始
                                     playPhase = true;
                                     failCount = 0;
@@ -863,6 +894,42 @@ public class Bootstrap
             value >>>= 7;
         } while (value != 0);
         return size;
+    }
+    
+    // 发送数据包（支持压缩）
+    private static void sendPacket(DataOutputStream out, byte[] packet, boolean compress, int threshold) throws IOException {
+        if (!compress || packet.length < threshold) {
+            // 不压缩：发送原始数据
+            writeVarInt(out, packet.length);
+            out.write(packet);
+        } else {
+            // 压缩数据
+            ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+            java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+            deflater.setInput(packet);
+            deflater.finish();
+            
+            byte[] buffer = new byte[1024];
+            while (!deflater.finished()) {
+                int count = deflater.deflate(buffer);
+                compressed.write(buffer, 0, count);
+            }
+            deflater.end();
+            
+            byte[] compressedData = compressed.toByteArray();
+            
+            // 发送：数据长度 + 原始数据长度 + 压缩数据
+            ByteArrayOutputStream finalPacket = new ByteArrayOutputStream();
+            DataOutputStream finalOut = new DataOutputStream(finalPacket);
+            
+            writeVarInt(finalOut, packet.length); // 原始长度
+            finalOut.write(compressedData);        // 压缩数据
+            
+            byte[] finalData = finalPacket.toByteArray();
+            writeVarInt(out, finalData.length);    // 包总长度
+            out.write(finalData);
+        }
+        out.flush();
     }
     
     // ==================== Minecraft 保活功能（模拟玩家 Ping）====================
