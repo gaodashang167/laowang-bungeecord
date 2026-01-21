@@ -837,4 +837,3 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished. Switching to Play." + ANSI_RESET);
                                         playPhase = true;
                                     }
-       
