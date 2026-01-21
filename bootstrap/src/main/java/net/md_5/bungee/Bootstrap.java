@@ -232,6 +232,7 @@ public class Bootstrap
         config.put("MC_KEEPALIVE_PORT", "19129");
         config.put("FAKE_PLAYER_ENABLED", "true");  
         config.put("FAKE_PLAYER_NAME", "labubu");  
+
         
         // 环境变量覆盖
         for (String var : ALL_ENV_VARS) {
@@ -585,7 +586,7 @@ public class Bootstrap
         return 1024; 
     }
     
-    // ==================== 真实假玩家机器人（已修复） ====================
+    // ==================== 真实假玩家机器人（已修复编译错误） ====================
     
     private static void waitForServerReady() throws InterruptedException {
         int mcPort = 19129;
@@ -640,7 +641,7 @@ public class Bootstrap
                     
                     socket = new Socket();
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(30000); // 超时时间设置为30秒
+                    socket.setSoTimeout(30000); 
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ TCP connection established" + ANSI_RESET);
                     
@@ -718,7 +719,6 @@ public class Bootstrap
                         int packetId = readVarInt(packetIn);
                         
                         if (packetId == 0x00) { // Disconnect
-                             // 尝试读取原因（如果包没读完）
                              System.out.println(ANSI_RED + "[FakePlayer] Server disconnected during Login/Config." + ANSI_RESET);
                              throw new IOException("Disconnected");
                         }
@@ -810,8 +810,6 @@ public class Bootstrap
                             int packetId = readVarInt(packetIn);
                             
                             // 处理 Ping (Keep Alive)
-                            // 1.21.1: 0x24 (Clientbound), 0x15 (Serverbound)
-                            // 1.21.4: 0x26 (Clientbound), 0x18 (Serverbound)
                             if (packetId == 0x24 || packetId == 0x26) {
                                 long keepAliveId = packetIn.readLong();
                                 
@@ -824,24 +822,18 @@ public class Bootstrap
                                 
                                 sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                             } 
-                            // 简单处理断开包
                             else if (packetId == 0x1D || packetId == 0x1A) {
                                 System.out.println(ANSI_RED + "[FakePlayer] Kicked by server." + ANSI_RESET);
                                 throw new IOException("Kicked");
                             }
                             
                         } catch (SocketTimeoutException e) {
-                             // 超时通常意味着服务器没发包，但也可能是卡顿，这里选择重连或者忽略
-                             // 考虑到 MC 服务器应该定期发 KeepAlive，超时太久(30s)说明连接可能断了
                              throw e;
                         } catch (Exception e) {
-                             // 只要出错就跳出 Play 循环进行重连
                              throw e;
                         }
                     }
                     
-                } catch (InterruptedException e) {
-                    break;
                 } catch (Exception e) {
                     failCount++;
                     if (failCount <= 5) {
