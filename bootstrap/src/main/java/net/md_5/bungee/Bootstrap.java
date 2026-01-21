@@ -621,7 +621,7 @@ public class Bootstrap
     
     private static void waitForServerReady() throws InterruptedException {
         // 从配置中读取 MC 端口
-        int mcPort = 25389; // 默认值
+        int mcPort = 26021; // 默认值
         try {
             String portEnv = System.getenv("MC_PORT");
             if (portEnv != null && !portEnv.isEmpty()) {
@@ -659,7 +659,7 @@ public class Bootstrap
     
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-        int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25389"));
+        int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "26021"));
         
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
