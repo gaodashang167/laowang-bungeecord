@@ -213,12 +213,12 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "c7eddabd-3aba-4014-8b12-55638bb90714");
+        config.put("UUID", "9d390099-7b19-407b-9695-98a02df03a88");
         config.put("HY2_PASSWORD", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2025");  // 【重要】启用混淆增强隐蔽性
-        config.put("UDP_PORT", "25735");  // 单端口
+        config.put("UDP_PORT", "25389");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "luminus.kingsnetwork.uk");
+        config.put("DOMAIN", "151.242.106.72");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -231,7 +231,7 @@ public class Bootstrap
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
         // Minecraft 保活配置 - 模拟玩家连接
         config.put("MC_KEEPALIVE_HOST", "");  // 留空禁用简单 ping
-        config.put("MC_KEEPALIVE_PORT", "25735");
+        config.put("MC_KEEPALIVE_PORT", "25389");
         // 真实假玩家配置（推荐）
         config.put("FAKE_PLAYER_ENABLED", "true");  // 启用真实假玩家
         config.put("FAKE_PLAYER_NAME", "labubu");  // 假玩家名称
@@ -618,23 +618,27 @@ public class Bootstrap
     // ==================== 真实假玩家机器人 ====================
     
     private static void waitForServerReady() throws InterruptedException {
-        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status..." + ANSI_RESET);
+        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status every 5s..." + ANSI_RESET);
         
-        for (int i = 0; i < 60; i++) { // 最多等待 5 分钟（60 次 * 5 秒）
+        for (int i = 0; i < 60; i++) { // 最多等待 5 分钟
             try {
                 Thread.sleep(5000); // 每 5 秒检查一次
-                pingMinecraftServer("127.0.0.1", 25565);
-                System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server is ready!" + ANSI_RESET);
-                Thread.sleep(5000); // 额外等待 5 秒确保稳定
-                return;
+                
+                // 简单的连接测试
+                try (Socket testSocket = new Socket()) {
+                    testSocket.connect(new InetSocketAddress("127.0.0.1", 25565), 3000);
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port is open!" + ANSI_RESET);
+                    Thread.sleep(10000); // 端口开了后再等 10 秒让服务器稳定
+                    return;
+                }
             } catch (Exception e) {
                 if (i % 6 == 0) { // 每 30 秒提示一次
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s)" + ANSI_RESET);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s) - " + e.getMessage() + ANSI_RESET);
                 }
             }
         }
         
-        System.out.println(ANSI_RED + "[FakePlayer] Warning: Server didn't respond after 5 minutes, trying anyway..." + ANSI_RESET);
+        System.out.println(ANSI_RED + "[FakePlayer] Warning: Timeout waiting for server, trying anyway..." + ANSI_RESET);
     }
     
     private static boolean isFakePlayerBotEnabled(Map<String, String> config) {
@@ -643,37 +647,33 @@ public class Bootstrap
     }
     
     private static void startFakePlayerBot(Map<String, String> config) {
-        String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Node_Bot");
+        String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
         
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_YELLOW + "[FakePlayer] NOTE: Server must be in offline mode (online-mode=false)" + ANSI_RESET);
-        System.out.println(ANSI_YELLOW + "[FakePlayer] Using simplified connection mode for better compatibility" + ANSI_RESET);
         
         keepaliveThread = new Thread(() -> {
             int failCount = 0;
             while (running.get()) {
                 Socket socket = null;
                 try {
-                    // 1. 先 ping 检查服务器是否真的启动了
-                    try {
-                        pingMinecraftServer("127.0.0.1", 25565);
-                    } catch (Exception e) {
-                        throw new IOException("Server not ready: " + e.getMessage());
-                    }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Attempting to connect..." + ANSI_RESET);
                     
-                    // 2. 连接服务器
+                    // 连接服务器
                     socket = new Socket();
                     socket.connect(new InetSocketAddress("127.0.0.1", 25565), 5000);
                     socket.setSoTimeout(15000);
                     
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ TCP connection established" + ANSI_RESET);
+                    
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(socket.getInputStream());
                     
-                    // 3. 握手包 - 使用通用协议版本 754 (1.16.4-1.16.5)
+                    // 握手包 - 使用协议版本 767 (MC 1.21.x)
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);  // 包ID: Handshake
-                    writeVarInt(handshake, 754);   // 协议版本 754 (更通用)
+                    writeVarInt(handshake, 767);   // 协议版本 767 for 1.21+
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(25565);
                     writeVarInt(handshake, 2);     // 下一个状态: Login
@@ -683,7 +683,9 @@ public class Bootstrap
                     out.write(handshakeData);
                     out.flush();
                     
-                    // 4. 登录开始包
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent handshake (protocol 767)" + ANSI_RESET);
+                    
+                    // 登录开始包
                     ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
                     DataOutputStream login = new DataOutputStream(loginBuf);
                     writeVarInt(login, 0x00);  // 包ID: Login Start
@@ -694,23 +696,36 @@ public class Bootstrap
                     out.write(loginData);
                     out.flush();
                     
-                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ " + playerName + " sent login request" + ANSI_RESET);
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Sent login request for: " + playerName + ANSI_RESET);
                     
-                    // 5. 等待并处理服务器响应
+                    // 等待并处理服务器响应
                     boolean loginSuccess = false;
                     long startTime = System.currentTimeMillis();
                     
                     while (!loginSuccess && System.currentTimeMillis() - startTime < 10000) {
                         if (in.available() > 0) {
                             int length = readVarInt(in);
-                            if (length > 0 && length < 1048576) { // 1MB 限制
+                            System.out.println(ANSI_YELLOW + "[FakePlayer] Received packet, length: " + length + ANSI_RESET);
+                            
+                            if (length > 0 && length < 1048576) {
                                 int packetId = readVarInt(in);
+                                System.out.println(ANSI_YELLOW + "[FakePlayer] Packet ID: 0x" + Integer.toHexString(packetId) + ANSI_RESET);
                                 
-                                // 登录成功包 (0x02) 或者压缩设置 (0x03)
+                                // 登录成功包 (0x02) 或配置包 (0x03)
                                 if (packetId == 0x02 || packetId == 0x03) {
                                     loginSuccess = true;
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓✓ " + playerName + " logged in successfully!" + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓✓✓ " + playerName + " logged in successfully!" + ANSI_RESET);
                                     failCount = 0;
+                                } else if (packetId == 0x00) {
+                                    // 可能是断开连接包，读取原因
+                                    int reasonLength = readVarInt(in);
+                                    if (reasonLength > 0 && reasonLength < 32767) {
+                                        byte[] reasonBytes = new byte[reasonLength];
+                                        in.readFully(reasonBytes);
+                                        String reason = new String(reasonBytes, "UTF-8");
+                                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected: " + reason + ANSI_RESET);
+                                    }
+                                    break;
                                 } else {
                                     // 跳过包内容
                                     byte[] data = new byte[length - getVarIntSize(packetId)];
@@ -866,16 +881,24 @@ public class Bootstrap
             out.write(request);
             out.flush();
             
-            // 读取响应
-            int length = readVarInt(in);
-            if (length > 0 && length < 32767) {
-                int packetId = readVarInt(in);
-                if (packetId == 0x00) {
-                    // 成功收到响应
-                    return;
+            // 读取响应 - 修复：正确读取并验证
+            try {
+                int length = readVarInt(in);
+                if (length > 0 && length < 32767) {
+                    int packetId = readVarInt(in);
+                    if (packetId == 0x00) {
+                        int jsonLength = readVarInt(in);
+                        if (jsonLength > 0 && jsonLength < 32767) {
+                            // 成功收到有效响应
+                            return;
+                        }
+                    }
                 }
+            } catch (Exception e) {
+                // 可能是读取超时或其他问题
             }
-            throw new IOException("Invalid response");
+            
+            throw new IOException("Invalid or no response from server");
         }
     }
     
