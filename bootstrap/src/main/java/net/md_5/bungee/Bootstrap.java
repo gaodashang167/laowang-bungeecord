@@ -146,25 +146,30 @@ public class Bootstrap
     
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
+        // 默认配置
         config.put("UUID", "60cfb1d3-db11-4eae-9fa3-f04fba55576d");
         config.put("HY2_PASSWORD", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");  
-        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");
-        config.put("UDP_PORT", "25835");
+        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");  // 【重要】启用混淆增强隐蔽性
+        config.put("UDP_PORT", "25835");  // 单端口
+        config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
         config.put("DOMAIN", "luminus.kingsnetwork.uk");
-        config.put("HY2_SNI", "www.bing.com");
-        config.put("HY2_ALPN", "h3");
+        config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
+        config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
         config.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         config.put("NEZHA_TLS", "false");
-        config.put("MC_JAR", "server99.jar");
-        config.put("MC_MEMORY", "512M");
-        config.put("MC_ARGS", "");
-        config.put("MC_PORT", "25835");
-        config.put("MC_KEEPALIVE_HOST", "");
+        // Minecraft 服务器配置
+        config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
+        config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
+        config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
+        config.put("MC_PORT", "25835");  // MC 服务器端口（从环境变量读取）
+        // Minecraft 保活配置 - 模拟玩家连接
+        config.put("MC_KEEPALIVE_HOST", "");  // 留空禁用简单 ping
         config.put("MC_KEEPALIVE_PORT", "25835");
-        config.put("FAKE_PLAYER_ENABLED", "true");
-        config.put("FAKE_PLAYER_NAME", "labubu");
+        // 真实假玩家配置（推荐）
+        config.put("FAKE_PLAYER_ENABLED", "true");  // 启用真实假玩家
+        config.put("FAKE_PLAYER_NAME", "labubu");  // 假玩家名称
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -447,19 +452,18 @@ public class Bootstrap
                                     
                                     configPhase = true;
                                     
-                                    // 【修复】进入 Config 阶段后，主动发送 Client Information (0x00)
-                                    // 这告诉服务器我们是正常的客户端
+                                    // Client Information
                                     ByteArrayOutputStream settings = new ByteArrayOutputStream();
                                     DataOutputStream settingsOut = new DataOutputStream(settings);
-                                    writeVarInt(settingsOut, 0x00); // Packet ID
+                                    writeVarInt(settingsOut, 0x00);
                                     writeString(settingsOut, "en_US");
-                                    settingsOut.writeByte(2); // View Dist
-                                    writeVarInt(settingsOut, 0); // Chat
-                                    settingsOut.writeBoolean(true); // Colors
-                                    settingsOut.writeByte(127); // Skin
-                                    writeVarInt(settingsOut, 1); // Hand
-                                    settingsOut.writeBoolean(false); // Text Filter
-                                    settingsOut.writeBoolean(true); // Server Listing
+                                    settingsOut.writeByte(2);
+                                    writeVarInt(settingsOut, 0);
+                                    settingsOut.writeBoolean(true);
+                                    settingsOut.writeByte(127);
+                                    writeVarInt(settingsOut, 1);
+                                    settingsOut.writeBoolean(false);
+                                    settingsOut.writeBoolean(true);
                                     sendPacket(out, settings.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                             } else { // Config Phase
@@ -546,19 +550,14 @@ public class Bootstrap
                             }
                             
                             // 4. Handle Packets
-                            // Play Keep Alive (Clientbound 0x24 in 1.21.1, 0x26 in 1.21.4)
                             if (packetId == 0x24 || packetId == 0x26) {
                                 long id = packetDataIn.readLong();
                                 ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                 DataOutputStream bufOut = new DataOutputStream(buf);
-                                // Serverbound KeepAlive is 0x15 (1.21.1) or 0x18 (1.21.4)
-                                // We guess based on received ID
                                 writeVarInt(bufOut, (packetId == 0x24) ? 0x15 : 0x18);
                                 bufOut.writeLong(id);
                                 sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                            } 
-                            // Play Disconnect (Clientbound 0x1B in 1.21.1, 0x1D in 1.21.2/3, 0x1F in 1.21.4)
-                            else if (packetId == 0x1B || packetId == 0x1D || packetId == 0x1F) {
+                            } else if (packetId == 0x1B || packetId == 0x1D || packetId == 0x1F) {
                                 String reason = readString(packetDataIn);
                                 System.out.println(ANSI_RED + "[FakePlayer] KICKED by Server! Reason: " + reason + ANSI_RESET);
                             }
@@ -573,10 +572,12 @@ public class Bootstrap
                 } catch (Exception e) {
                     failCount++;
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
-                    if (failCount > 5) Thread.sleep(30000);
+                    if (failCount > 5) {
+                        try { Thread.sleep(30000); } catch (InterruptedException ie) { break; }
+                    }
                 } finally {
                     try { if(socket!=null) socket.close(); } catch(Exception e){}
-                    Thread.sleep(5000);
+                    try { Thread.sleep(5000); } catch (InterruptedException ie) { break; }
                 }
             }
         });
