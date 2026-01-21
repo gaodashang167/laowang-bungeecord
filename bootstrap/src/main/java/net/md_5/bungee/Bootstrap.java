@@ -723,7 +723,8 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     long startTime = System.currentTimeMillis();
                     
-                    while (!playPhase && System.currentTimeMillis() - startTime < 15000) {
+                    // 修复：将超时时间从 15s 增加到 60s，因为 1.21 配置包(Registry Data)非常大
+                    while (!playPhase && System.currentTimeMillis() - startTime < 60000) {
                         if (in.available() > 0) {
                             // 读取包长度
                             int packetLength = readVarInt(in);
@@ -836,8 +837,10 @@ public class Bootstrap
                                         
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished. Switching to Play." + ANSI_RESET);
                                         playPhase = true;
+                                    } else {
+                                        // 打印被忽略的包（用于调试）
+                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Config packet received: 0x" + Integer.toHexString(packetId) + ANSI_RESET);
                                     }
-                                    // 忽略其他配置包
                                 }
                             }
                         }
