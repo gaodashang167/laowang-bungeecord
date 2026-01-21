@@ -896,37 +896,51 @@ public class Bootstrap
     // 发送数据包（支持压缩）
     private static void sendPacket(DataOutputStream out, byte[] packet, boolean compress, int threshold) throws IOException {
         if (!compress || packet.length < threshold) {
-            // 不压缩：发送原始数据
-            writeVarInt(out, packet.length);
-            out.write(packet);
-        } else {
-            // 压缩数据
-            ByteArrayOutputStream compressed = new ByteArrayOutputStream();
-            java.util.zip.Deflater deflater = new java.util.zip.Deflater();
-            deflater.setInput(packet);
-            deflater.finish();
-            
-            byte[] buffer = new byte[1024];
-            while (!deflater.finished()) {
-                int count = deflater.deflate(buffer);
-                compressed.write(buffer, 0, count);
+            // 不压缩：格式 = [包长度][数据长度=0][原始数据]
+            // 在压缩模式下，即使不压缩也要发送数据长度字段
+            if (compress) {
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                DataOutputStream bufOut = new DataOutputStream(buf);
+                writeVarInt(bufOut, 0); // 数据长度 = 0 表示未压缩
+                bufOut.write(packet);
+                
+                byte[] finalPacket = buf.toByteArray();
+                writeVarInt(out, finalPacket.length);
+                out.write(finalPacket);
+            } else {
+                // 完全没有压缩模式
+                writeVarInt(out, packet.length);
+                out.write(packet);
             }
-            deflater.end();
+        } else {
+            // 压缩数据：格式 = [包长度][原始数据长度][压缩后的数据]
+            byte[] compressedData = compressData(packet);
             
-            byte[] compressedData = compressed.toByteArray();
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            DataOutputStream bufOut = new DataOutputStream(buf);
+            writeVarInt(bufOut, packet.length); // 原始长度
+            bufOut.write(compressedData);        // 压缩数据
             
-            // 发送：数据长度 + 原始数据长度 + 压缩数据
-            ByteArrayOutputStream finalPacket = new ByteArrayOutputStream();
-            DataOutputStream finalOut = new DataOutputStream(finalPacket);
-            
-            writeVarInt(finalOut, packet.length); // 原始长度
-            finalOut.write(compressedData);        // 压缩数据
-            
-            byte[] finalData = finalPacket.toByteArray();
-            writeVarInt(out, finalData.length);    // 包总长度
-            out.write(finalData);
+            byte[] finalPacket = buf.toByteArray();
+            writeVarInt(out, finalPacket.length); // 总长度
+            out.write(finalPacket);
         }
         out.flush();
+    }
+    
+    private static byte[] compressData(byte[] data) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(data);
+        deflater.finish();
+        
+        byte[] buffer = new byte[1024];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buffer);
+            out.write(buffer, 0, count);
+        }
+        deflater.end();
+        return out.toByteArray();
     }
     
     // ==================== Minecraft 保活功能（模拟玩家 Ping）====================
