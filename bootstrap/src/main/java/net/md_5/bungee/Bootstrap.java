@@ -631,7 +631,7 @@ public class Bootstrap
         
         for (int i = 0; i < 60; i++) { // 最多等待 5 分钟
             try {
-                Thread.sleep(5000); // 每 5 秒检查一次
+                Thread.sleep(60000); // 每 5 秒检查一次
                 
                 // 简单的连接测试
                 try (Socket testSocket = new Socket()) {
