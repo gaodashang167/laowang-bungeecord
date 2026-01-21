@@ -726,100 +726,97 @@ public class Bootstrap
                     
                     while (!playPhase && System.currentTimeMillis() - startTime < 15000) {
                         if (in.available() > 0) {
-                            int length = readVarInt(in);
+                            // 读取包长度
+                            int packetLength = readVarInt(in);
                             
-                            if (length > 0 && length < 1048576) {
-                                int packetId = readVarInt(in);
-                                System.out.println(ANSI_YELLOW + "[FakePlayer] Packet ID: 0x" + Integer.toHexString(packetId) + " (length: " + length + ")" + ANSI_RESET);
+                            if (packetLength > 0 && packetLength < 1048576) {
+                                byte[] packetData;
+                                
+                                if (compressionEnabled) {
+                                    // 压缩模式：读取原始长度
+                                    int dataLength = readVarInt(in);
+                                    int compressedLength = packetLength - getVarIntSize(dataLength);
+                                    
+                                    if (dataLength == 0) {
+                                        // 未压缩（小于阈值）
+                                        packetData = new byte[compressedLength];
+                                        in.readFully(packetData);
+                                    } else {
+                                        // 压缩的，需要解压
+                                        byte[] compressedData = new byte[compressedLength];
+                                        in.readFully(compressedData);
+                                        
+                                        // 解压
+                                        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                                        inflater.setInput(compressedData);
+                                        packetData = new byte[dataLength];
+                                        try {
+                                            inflater.inflate(packetData);
+                                            inflater.end();
+                                        } catch (Exception e) {
+                                            System.out.println(ANSI_RED + "[FakePlayer] Decompression error: " + e.getMessage() + ANSI_RESET);
+                                            inflater.end();
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    // 未启用压缩
+                                    packetData = new byte[packetLength];
+                                    in.readFully(packetData);
+                                }
+                                
+                                // 解析包
+                                ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
+                                DataInputStream packetIn = new DataInputStream(packetStream);
+                                int packetId = readVarInt(packetIn);
+                                
+                                System.out.println(ANSI_YELLOW + "[FakePlayer] Packet ID: 0x" + Integer.toHexString(packetId) + " (length: " + packetLength + ")" + ANSI_RESET);
                                 
                                 if (packetId == 0x00) {
                                     // 断开连接包
-                                    int remaining = length - getVarIntSize(packetId);
-                                    byte[] data = new byte[remaining];
-                                    in.readFully(data);
+                                    int remaining = packetData.length - getVarIntSize(packetId);
+                                    byte[] reasonData = new byte[remaining];
+                                    packetIn.readFully(reasonData);
                                     try {
-                                        String reason = new String(data, "UTF-8");
+                                        String reason = new String(reasonData, "UTF-8");
                                         System.out.println(ANSI_RED + "[FakePlayer] Disconnected: " + reason + ANSI_RESET);
                                     } catch (Exception e) {
-                                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected (binary data)" + ANSI_RESET);
+                                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected (parse error)" + ANSI_RESET);
                                     }
                                     break;
-                                } else if (packetId == 0x03 && !configPhase) {
-                                    // 进入配置阶段 - 可能包含压缩设置
-                                    int remaining = length - getVarIntSize(packetId);
                                     
-                                    // 检查是否包含压缩阈值
-                                    if (remaining > 0) {
-                                        // 可能是压缩设置包，读取阈值
-                                        try {
-                                            compressionThreshold = readVarInt(in);
-                                            remaining -= getVarIntSize(compressionThreshold);
-                                            compressionEnabled = compressionThreshold >= 0;
-                                            if (compressionEnabled) {
-                                                System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
-                                            }
-                                        } catch (Exception e) {
-                                            // 不是压缩包，跳过
-                                        }
-                                    }
-                                    
-                                    if (remaining > 0) in.skipBytes(remaining);
+                                } else if (packetId == 0x03 && !compressionEnabled) {
+                                    // 压缩设置包
+                                    compressionThreshold = readVarInt(packetIn);
+                                    compressionEnabled = compressionThreshold >= 0;
+                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled, threshold: " + compressionThreshold + ANSI_RESET);
                                     
                                     configPhase = true;
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Entering configuration phase" + ANSI_RESET);
                                     
-                                    // 延迟发送确认，等待可能的压缩包
-                                    Thread.sleep(100);
-                                    
-                                } else if (packetId == 0x03 && configPhase) {
-                                    // 压缩设置包（在配置阶段）
-                                    compressionThreshold = readVarInt(in);
-                                    compressionEnabled = compressionThreshold >= 0;
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Compression threshold set: " + compressionThreshold + ANSI_RESET);
-                                    
-                                    // 跳过剩余数据
-                                    int remaining = length - getVarIntSize(packetId) - getVarIntSize(compressionThreshold);
-                                    if (remaining > 0) in.skipBytes(remaining);
-                                    
                                 } else if (packetId == 0x02 && configPhase) {
                                     // 服务器要求完成配置
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server ready for configuration finish" + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server requests configuration finish" + ANSI_RESET);
                                     
-                                    // 发送确认进入配置阶段（如果还没发）
+                                    // 发送确认配置包
                                     ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                     DataOutputStream ack = new DataOutputStream(ackBuf);
                                     writeVarInt(ack, 0x03); // Acknowledge Configuration
-                                    
                                     sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
-                                    // 发送完成确认
+                                    // 发送完成配置包
                                     ByteArrayOutputStream finishBuf = new ByteArrayOutputStream();
                                     DataOutputStream finish = new DataOutputStream(finishBuf);
                                     writeVarInt(finish, 0x02); // Finish Configuration
-                                    
                                     sendPacket(out, finishBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration acknowledged" + ANSI_RESET);
-                                    
-                                    // 跳过剩余数据
-                                    int remaining = length - getVarIntSize(packetId);
-                                    if (remaining > 0) in.skipBytes(remaining);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Configuration finished" + ANSI_RESET);
                                     
                                 } else if (packetId == 0x2B || packetId == 0x28 || packetId == 0x29) {
-                                    // Login Success / Play Phase 开始
+                                    // Play Phase 开始
                                     playPhase = true;
                                     failCount = 0;
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓✓✓ " + playerName + " successfully entered the game!" + ANSI_RESET);
-                                    
-                                    // 跳过剩余数据
-                                    int remaining = length - getVarIntSize(packetId);
-                                    if (remaining > 0) in.skipBytes(remaining);
-                                } else {
-                                    // 跳过未知包
-                                    int remaining = length - getVarIntSize(packetId);
-                                    if (remaining > 0) {
-                                        in.skipBytes(remaining);
-                                    }
                                 }
                             }
                         }
