@@ -671,7 +671,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 socket = new Socket();
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                socket.setSoTimeout(15000); // Socket 层面的读超时
+                socket.setSoTimeout(15000); 
 
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(socket.getInputStream());
@@ -771,7 +771,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         playPhase = true;
                                     } else if (packetId == 0x03) { // Keep Alive (Config)
                                         long id = packetIn.readLong();
-                                        System.out.println("[FakePlayer] Config KeepAlive: " + id);
+                                        // System.out.println("[FakePlayer] Config KeepAlive: " + id);
                                         // Reply Keep Alive (0x02)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
@@ -784,15 +784,16 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 // --- Play Phase ---
                                 
                                 // 【万能 Keep Alive 探测】
-                                // 不再硬编码 packetId == 0x26 或 0x3E，而是检查包特征
+                                // 不再硬编码 packetId，而是检查包特征
                                 if (packetData.length < 20 && packetIn.available() >= 8) {
-                                    // 标记当前的读取位置，以便探测失败后重置（虽然 ByteArrayInputStream 不支持 mark/reset 很好，但这里只读一次）
+                                    // 标记当前的读取位置
                                     packetStream.mark(0); 
                                     try {
                                         long keepAliveId = packetIn.readLong();
-                                        // 简单的启发式检查：如果剩下的数据刚好空了，或者非常短，这极大概率是 Keep Alive
+                                        // 如果剩下的数据刚好空了，这极大概率是 Keep Alive
                                         if (packetIn.available() == 0) {
-                                            System.out.println(ANSI_CYAN + "[FakePlayer] Detected KeepAlive Packet (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
+                                            // 修复点：将 ANSI_CYAN 替换为 ANSI_GREEN
+                                            System.out.println(ANSI_GREEN + "[FakePlayer] Detected KeepAlive Packet (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                             
                                             // 回复：Minecraft 1.21.x Serverbound Keep Alive ID 通常是 0x18
                                             int replyId = 0x18; 
@@ -845,6 +846,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
+
 
 
 
