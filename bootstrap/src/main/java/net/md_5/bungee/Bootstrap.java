@@ -679,7 +679,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 writeString(hs, "127.0.0.1");
                 hs.writeShort(mcPort);
                 writeVarInt(hs, 2);
-                sendRaw(out, hsBuf.toByteArray());
+                sendPacket(out, hsBuf.toByteArray(), false, -1);
 
                 // ================= Login =================
                 ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
@@ -689,13 +689,12 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
                 login.writeLong(uuid.getMostSignificantBits());
                 login.writeLong(uuid.getLeastSignificantBits());
-                sendRaw(out, loginBuf.toByteArray());
+                sendPacket(out, loginBuf.toByteArray(), false, -1);
 
                 boolean compression = false;
                 int threshold = -1;
                 boolean playPhase = false;
 
-                // ================= Main Loop =================
                 while (running.get() && !socket.isClosed()) {
                     int packetLength;
                     try {
@@ -708,36 +707,42 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         throw new IOException("Bad packet length: " + packetLength);
                     }
 
-                    byte[] payload = new byte[packetLength];
-                    in.readFully(payload);
+                    byte[] packetData = new byte[packetLength];
+                    in.readFully(packetData);
 
                     DataInputStream pin;
+
                     if (compression) {
-                        DataInputStream tmp = new DataInputStream(new ByteArrayInputStream(payload));
+                        DataInputStream tmp = new DataInputStream(new ByteArrayInputStream(packetData));
                         int dataLen = readVarInt(tmp);
+
                         if (dataLen > 0) {
-                            byte[] comp = tmp.readAllBytes();
-                            Inflater inf = new Inflater();
-                            inf.setInput(comp);
-                            byte[] outBuf = new byte[dataLen];
-                            inf.inflate(outBuf);
-                            inf.end();
-                            pin = new DataInputStream(new ByteArrayInputStream(outBuf));
+                            byte[] compressed = new byte[packetData.length - getVarIntSize(dataLen)];
+                            tmp.readFully(compressed);
+
+                            java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                            inflater.setInput(compressed);
+
+                            byte[] uncompressed = new byte[dataLen];
+                            inflater.inflate(uncompressed);
+                            inflater.end();
+
+                            pin = new DataInputStream(new ByteArrayInputStream(uncompressed));
                         } else {
                             pin = tmp;
                         }
                     } else {
-                        pin = new DataInputStream(new ByteArrayInputStream(payload));
+                        pin = new DataInputStream(new ByteArrayInputStream(packetData));
                     }
 
-                    int pid = readVarInt(pin);
+                    int packetId = readVarInt(pin);
 
                     // ================= Login / Config =================
                     if (!playPhase) {
-                        if (pid == 0x03) { // Set Compression
+                        if (packetId == 0x03) { // Set Compression
                             threshold = readVarInt(pin);
                             compression = threshold >= 0;
-                        } else if (pid == 0x02) { // Login Success
+                        } else if (packetId == 0x02) { // Login Success
                             ByteArrayOutputStream ack = new ByteArrayOutputStream();
                             DataOutputStream a = new DataOutputStream(ack);
                             writeVarInt(a, 0x03);
@@ -756,7 +761,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             i.writeBoolean(true);
                             writeVarInt(i, 0);
                             sendPacket(out, info.toByteArray(), compression, threshold);
-                        } else if (pid == 0x03) { // Config Finish
+                        } else if (packetId == 0x03) { // Config Finish
                             ByteArrayOutputStream ack = new ByteArrayOutputStream();
                             DataOutputStream a = new DataOutputStream(ack);
                             writeVarInt(a, 0x03);
@@ -768,24 +773,22 @@ private static void startFakePlayerBot(Map<String, String> config) {
                     }
 
                     // ================= Play Phase =================
-                    if (pid == 0x26) { // Clientbound KeepAlive
+                    if (packetId == 0x26) { // KeepAlive
                         long id = pin.readLong();
                         ByteArrayOutputStream pong = new ByteArrayOutputStream();
                         DataOutputStream p = new DataOutputStream(pong);
                         writeVarInt(p, 0x1B);
                         p.writeLong(id);
                         sendPacket(out, pong.toByteArray(), compression, threshold);
-                        System.out.println(ANSI_GREEN + "[FakePlayer] KeepAlive OK" + ANSI_RESET);
-                    } 
-                    else if (pid == 0x1D || pid == 0x00) { // Disconnect
-                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server" + ANSI_RESET);
+                    } else if (packetId == 0x1D || packetId == 0x00) {
+                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected" + ANSI_RESET);
                         break;
                     }
-                    // ⚠️ 其他 Play 包：已完整读取，直接忽略（这是稳定的关键）
+                    // 其他 Play 包：已完整读取，安全忽略
                 }
 
             } catch (Exception e) {
-                System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
+                System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
             }
 
             try {
@@ -797,6 +800,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
+
 
 
 
