@@ -766,7 +766,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
 
-                                        // 2. Send Client Info (With Particle Status)
+                                        // 2. Send Client Info (With 1.21.4 Particle Status)
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00); 
@@ -809,24 +809,24 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             } else {
                                 // --- Play Phase ---
                                 
-                                // 【Play Phase Keep Alive 修复】
-                                // 你的服务器在 1.21.4 环境下，Clientbound Keep Alive 似乎是 0x2B (或者 0x26)
-                                // 我们只针对这特定的包 ID 进行回复，避免误回 0x4A 导致崩溃
+                                // 【Play Phase Keep Alive】
+                                // 你的日志证明 Clientbound ID 是 0x3E
+                                // Minecraft 1.21.4 Serverbound Keep Alive ID 是 0x15
                                 
-                                if (packetId == 0x26 || packetId == 0x2B || packetId == 0x3E) {
+                                if (packetId == 0x3E) { // 锁定监听 0x3E，防止误判
                                     if (packetIn.available() >= 8) {
                                         try {
                                             long keepAliveId = packetIn.readLong();
                                             System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                             
-                                            // 统一回复 Serverbound ID: 0x18
+                                            // 【修正】使用 0x15 (Serverbound Keep Alive)
                                             ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                             DataOutputStream bufOut = new DataOutputStream(buf);
-                                            writeVarInt(bufOut, 0x18); 
+                                            writeVarInt(bufOut, 0x15); 
                                             bufOut.writeLong(keepAliveId);
                                             sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                         } catch (Exception e) {
-                                            // 忽略读取错误
+                                            // 忽略
                                         }
                                     }
                                 }
@@ -867,6 +867,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
+
 
 
 
