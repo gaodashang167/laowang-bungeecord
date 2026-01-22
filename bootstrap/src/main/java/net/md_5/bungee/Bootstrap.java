@@ -657,32 +657,25 @@ public class Bootstrap
     
 private static void startFakePlayerBot(Map<String, String> config) {
     String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25813"));
+    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25994"));
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Final Fix)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Debug Mode)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
-        // 【修复】补回变量定义
         int failCount = 0;
-        // 64KB 垃圾桶，用来吞掉大包
         byte[] trashBuffer = new byte[65536]; 
 
         while (running.get()) {
             Socket socket = null;
             try {
-                // ==========================================
-                //      连接建立
-                // ==========================================
-                socket = new Socket();
-                socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 2000);
-                
-                System.out.println(ANSI_GREEN + "[FakePlayer] Connected!" + ANSI_RESET);
-                // 读超时设为 0 (无限等待)，防止大包传输时被误判超时
-                socket.setSoTimeout(0); 
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
 
-                // 使用 BufferedInputStream 缓冲流，减少 EOF 概率
+                socket = new Socket();
+                socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
+                socket.setSoTimeout(30000); 
+
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(socket.getInputStream()));
 
@@ -713,21 +706,19 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 out.flush();
 
                 System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                failCount = 0; // 连接成功，清零重试计数
 
                 boolean configPhase = false;
                 boolean playPhase = false;
                 boolean compressionEnabled = false;
                 int compressionThreshold = -1;
 
-                // ==========================================
-                //      主循环
-                // ==========================================
                 while (running.get() && !socket.isClosed()) {
                     try {
                         int packetLength = readVarInt(in);
-                        // 长度检查
-                        if (packetLength < 0 || packetLength > 100000000) { 
+                        // 打印包长度，调试 EOF 原因
+                        // System.out.println("[Debug] Pkg Len: " + packetLength); 
+
+                        if (packetLength < 0 || packetLength > 50000000) { 
                              throw new java.io.IOException("Bad size: " + packetLength);
                         }
 
@@ -737,7 +728,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 【策略】大于 8KB 的包，视为大包（地图/实体），循环读取丢弃
+                            // 丢弃大包逻辑
                             if (compressedLength > 8192) {
                                 int remaining = compressedLength;
                                 while (remaining > 0) {
@@ -748,7 +739,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 continue; 
                             }
 
-                            // 小包（心跳/聊天），正常读入
                             byte[] compressedData = new byte[compressedLength];
                             in.readFully(compressedData);
 
@@ -766,7 +756,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 }
                             }
                         } else {
-                            // 非压缩模式
                             if (packetLength > 8192) {
                                 int remaining = packetLength;
                                 while (remaining > 0) {
@@ -786,7 +775,9 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         DataInputStream packetIn = new DataInputStream(packetStream);
                         int packetId = readVarInt(packetIn);
 
-                        // --- 状态机 ---
+                        // ==========================================
+                        //      状态机
+                        // ==========================================
 
                         if (!playPhase) {
                             if (!configPhase) {
@@ -867,24 +858,20 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         }
 
                     } catch (java.io.EOFException e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] EOF (Server Closed)" + ANSI_RESET);
+                        System.out.println(ANSI_RED + "[FakePlayer] Stream EOF (Maybe network unstable?)" + ANSI_RESET);
                         break;
                     } catch (Exception e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
+                        System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
                         break;
                     }
                 }
 
                 if (socket != null) socket.close();
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                 Thread.sleep(10000);
 
-            } catch (java.net.ConnectException e) {
-                // 服务器没开，等待 5 秒重试
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for server... (5s)" + ANSI_RESET);
-                try { Thread.sleep(5000); } catch (InterruptedException ex) { break; }
             } catch (Exception e) {
                 failCount++;
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Retry in 10s..." + ANSI_RESET);
                 try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
             }
         }
