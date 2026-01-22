@@ -661,10 +661,12 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Stream Discard Mode)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Final Fix)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
-        // 64KB 垃圾桶，用来一点点吞掉大包
+        // 【修复】补回变量定义
+        int failCount = 0;
+        // 64KB 垃圾桶，用来吞掉大包
         byte[] trashBuffer = new byte[65536]; 
 
         while (running.get()) {
@@ -677,9 +679,10 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 2000);
                 
                 System.out.println(ANSI_GREEN + "[FakePlayer] Connected!" + ANSI_RESET);
-                socket.setSoTimeout(0); // 永不超时 (防止大包传输时断开)
+                // 读超时设为 0 (无限等待)，防止大包传输时被误判超时
+                socket.setSoTimeout(0); 
 
-                // 使用 BufferedInputStream 缓冲流，进一步减少 EOF 概率
+                // 使用 BufferedInputStream 缓冲流，减少 EOF 概率
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(socket.getInputStream()));
 
@@ -710,6 +713,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 out.flush();
 
                 System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
+                failCount = 0; // 连接成功，清零重试计数
 
                 boolean configPhase = false;
                 boolean playPhase = false;
@@ -733,8 +737,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 【策略】大于 8KB 的包，视为大包（地图/实体），直接循环读取丢弃
-                            // 这样既不占内存，也能确保把网线里的数据清理干净
+                            // 【策略】大于 8KB 的包，视为大包（地图/实体），循环读取丢弃
                             if (compressedLength > 8192) {
                                 int remaining = compressedLength;
                                 while (remaining > 0) {
