@@ -661,12 +661,11 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Buffered + Debug Mode)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Final Stable Mode)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
-        byte[] trashBuffer = new byte[65536]; 
-
+        
         while (running.get()) {
             Socket socket = null;
             try {
@@ -674,9 +673,10 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 socket = new Socket();
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                socket.setSoTimeout(60000); // 60秒超时
+                // 读超时设为 0 (无限等待)，防止因为服务器发大包慢而断开
+                socket.setSoTimeout(0); 
 
-                // 【关键改进】使用 BufferedInputStream 包装，稳定数据流
+                // 【核心稳固】使用 BufferedInputStream 包装，解决 EOF 问题
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(socket.getInputStream()));
 
@@ -716,9 +716,9 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 while (running.get() && !socket.isClosed()) {
                     try {
                         int packetLength = readVarInt(in);
-                        // 长度检查
-                        if (packetLength < 0 || packetLength > 50000000) { 
-                             throw new java.io.IOException("Bad size: " + packetLength);
+                        // 允许最大 100MB 的包 (地图包可能很大)
+                        if (packetLength < 0 || packetLength > 100000000) { 
+                             throw new java.io.IOException("Packet too large: " + packetLength);
                         }
 
                         byte[] packetData = null;
@@ -727,46 +727,34 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 大包处理：只要大于 8KB 就读掉并忽略
-                            if (compressedLength > 8192) {
-                                // System.out.println("[Debug] Ignore Big Packet: " + compressedLength + " bytes");
-                                int remaining = compressedLength;
-                                while (remaining > 0) {
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue; 
-                            }
-
+                            // 【不再跳过】直接读入内存，确保流同步
                             byte[] compressedData = new byte[compressedLength];
                             in.readFully(compressedData);
 
                             if (dataLength == 0) {
                                 packetData = compressedData; 
                             } else {
-                                try {
-                                    java.util.zip.Inflater inflater = new java.util.zip.Inflater();
-                                    inflater.setInput(compressedData);
-                                    packetData = new byte[dataLength];
-                                    inflater.inflate(packetData);
-                                    inflater.end();
-                                } catch (Exception e) {
-                                    continue; 
+                                // 【按需解压】只解压 8KB 以下的小包
+                                // 这样既保证了流不乱，又不会因为解压地图包卡死
+                                if (dataLength > 8192) {
+                                    packetData = null; // 忽略大包内容
+                                } else {
+                                    try {
+                                        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                                        inflater.setInput(compressedData);
+                                        packetData = new byte[dataLength];
+                                        inflater.inflate(packetData);
+                                        inflater.end();
+                                    } catch (Exception e) {
+                                        packetData = null; 
+                                    }
                                 }
                             }
                         } else {
-                            if (packetLength > 8192) {
-                                int remaining = packetLength;
-                                while (remaining > 0) {
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue;
-                            }
-                            packetData = new byte[packetLength];
-                            in.readFully(packetData);
+                            // 非压缩模式
+                            byte[] rawData = new byte[packetLength];
+                            in.readFully(rawData);
+                            packetData = rawData;
                         }
 
                         if (packetData == null) continue;
@@ -857,10 +845,8 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             }
                         }
 
-                    } catch (java.net.SocketTimeoutException e) {
-                         continue;
                     } catch (java.io.EOFException e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] Stream End (EOF) - Server Closed" + ANSI_RESET);
+                        System.out.println(ANSI_RED + "[FakePlayer] Stream End (EOF) - Retry in 10s" + ANSI_RESET);
                         break;
                     } catch (Exception e) {
                         System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
@@ -869,7 +855,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 }
 
                 if (socket != null) socket.close();
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                 Thread.sleep(10000);
 
             } catch (Exception e) {
