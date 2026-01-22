@@ -661,7 +661,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Testing ID 0x1B)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Fix: Listen 0x26 -> Send 0x1B)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
@@ -724,7 +724,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 大包丢弃
+                            // 丢弃大包
                             if (compressedLength > 2048) {
                                 int remaining = compressedLength;
                                 while (remaining > 0) {
@@ -832,14 +832,13 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         } else {
                             // --- Play Phase ---
                             
-                            // Clientbound KeepAlive (0x3E)
-                            if (packetId == 0x3E) { 
+                            // 【终极修复】Clientbound KeepAlive ID 是 0x26
+                            if (packetId == 0x26) { 
                                 if (packetIn.available() >= 8) {
                                     long keepAliveId = packetIn.readLong();
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat 0x3E -> " + keepAliveId + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat 0x26 -> " + keepAliveId + ANSI_RESET);
                                     
-                                    // 【核心尝试】使用 0x1B (推测为 1.21.4 Keep Alive)
-                                    // 备选: 0x1A, 0x1C
+                                    // 回复 0x1B (Serverbound KeepAlive)
                                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                     DataOutputStream bufOut = new DataOutputStream(buf);
                                     writeVarInt(bufOut, 0x1B); 
