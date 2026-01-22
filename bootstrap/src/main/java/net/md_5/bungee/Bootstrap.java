@@ -212,12 +212,12 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "60cfb1d3-db11-4eae-9fa3-f04fba55576d");
+        config.put("UUID", "5c9e7aaa-8f42-4963-b779-a04281d08be7");
         config.put("HY2_PASSWORD", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");  
         config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");  // 【重要】启用混淆增强隐蔽性
-        config.put("UDP_PORT", "25971");  // 单端口
+        config.put("UDP_PORT", "2021");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "luminus.kingsnetwork.uk");
+        config.put("DOMAIN", "de02.beammphost.com");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -228,10 +228,10 @@ public class Bootstrap
         config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
         config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
-        config.put("MC_PORT", "25971");  // MC 服务器端口（从环境变量读取）
+        config.put("MC_PORT", "2021");  // MC 服务器端口（从环境变量读取）
         // Minecraft 保活配置 - 模拟玩家连接
         config.put("MC_KEEPALIVE_HOST", "");  // 留空禁用简单 ping
-        config.put("MC_KEEPALIVE_PORT", "25971");
+        config.put("MC_KEEPALIVE_PORT", "2021");
         // 真实假玩家配置（推荐）
         config.put("FAKE_PLAYER_ENABLED", "true");  // 启用真实假玩家
         config.put("FAKE_PLAYER_NAME", "labubu");  // 假玩家名称
@@ -619,7 +619,7 @@ public class Bootstrap
     
     private static void waitForServerReady() throws InterruptedException {
         // 从配置中读取 MC 端口
-        int mcPort = 25971; // 默认值
+        int mcPort = 2021; // 默认值
         try {
             String portEnv = System.getenv("MC_PORT");
             if (portEnv != null && !portEnv.isEmpty()) {
@@ -657,7 +657,7 @@ public class Bootstrap
     
 private static void startFakePlayerBot(Map<String, String> config) {
     String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25971"));
+    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "2021"));
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
