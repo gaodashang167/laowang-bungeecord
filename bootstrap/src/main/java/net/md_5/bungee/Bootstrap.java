@@ -657,16 +657,15 @@ public class Bootstrap
     
 private static void startFakePlayerBot(Map<String, String> config) {
     String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25971"));
+    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25835"));
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Fix: Listen 0x26 -> Send 0x1B)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Final: Recv 0x26 -> Send 0x1B)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
-        byte[] trashBuffer = new byte[65536]; 
-
+        
         while (running.get()) {
             Socket socket = null;
             try {
@@ -714,57 +713,49 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 while (running.get() && !socket.isClosed()) {
                     try {
                         int packetLength = readVarInt(in);
-                        if (packetLength < 0 || packetLength > 20971520) {
+                        // 稍微放宽上限，防止个别超大包导致误判
+                        if (packetLength < 0 || packetLength > 30000000) {
                              throw new java.io.IOException("Bad packet length: " + packetLength);
                         }
 
-                        byte[] packetData = null;
+                        byte[] packetData;
                         
                         if (compressionEnabled) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 丢弃大包
-                            if (compressedLength > 2048) {
-                                int remaining = compressedLength;
-                                while (remaining > 0) {
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue; 
-                            }
-
+                            // 【稳定修复】不再跳过，全部读入内存
+                            // 即使是 2MB 的包，读进来也比跳过它更安全，防止流错位
                             byte[] compressedData = new byte[compressedLength];
                             in.readFully(compressedData);
 
                             if (dataLength == 0) {
                                 packetData = compressedData; 
                             } else {
-                                try {
-                                    java.util.zip.Inflater inflater = new java.util.zip.Inflater();
-                                    inflater.setInput(compressedData);
-                                    packetData = new byte[dataLength];
-                                    inflater.inflate(packetData);
-                                    inflater.end();
-                                } catch (Exception e) {
-                                    continue; 
+                                // 只有小包才解压，大包(>2MB)虽然读进来了但不解压，直接丢弃
+                                // 这样既保证了流同步，又节省了 CPU
+                                if (dataLength > 2097152) {
+                                    packetData = null; // 丢弃大包内容
+                                } else {
+                                    try {
+                                        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                                        inflater.setInput(compressedData);
+                                        packetData = new byte[dataLength];
+                                        inflater.inflate(packetData);
+                                        inflater.end();
+                                    } catch (Exception e) {
+                                        packetData = null;
+                                    }
                                 }
                             }
                         } else {
-                            if (packetLength > 2048) {
-                                int remaining = packetLength;
-                                while (remaining > 0) {
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue;
-                            }
-                            packetData = new byte[packetLength];
-                            in.readFully(packetData);
+                            // 非压缩模式
+                            byte[] rawData = new byte[packetLength];
+                            in.readFully(rawData);
+                            packetData = rawData;
                         }
 
+                        // 如果是大包被我们丢弃了，直接下一轮
                         if (packetData == null) continue;
 
                         ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
@@ -832,7 +823,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         } else {
                             // --- Play Phase ---
                             
-                            // 【终极修复】Clientbound KeepAlive ID 是 0x26
+                            // 【终极修正】只监听 0x26 (Clientbound KeepAlive)
                             if (packetId == 0x26) { 
                                 if (packetIn.available() >= 8) {
                                     long keepAliveId = packetIn.readLong();
