@@ -657,238 +657,147 @@ public class Bootstrap
     
 private static void startFakePlayerBot(Map<String, String> config) {
     String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25994")); // 这里的默认端口不重要，配置会覆盖
+    int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25994"));
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Hard Read Mode)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
-        int failCount = 0;
-        // 准备一个 64KB 的缓冲区，专门用来接收并丢弃大包数据
-        byte[] trashBuffer = new byte[65536]; 
-
         while (running.get()) {
-            Socket socket = null;
-            try {
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
+            try (Socket socket = new Socket()) {
 
-                // --- 回归最原始的连接方式 ---
-                socket = new Socket();
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                socket.setSoTimeout(30000); // 30秒读超时
+                socket.setSoTimeout(15000);
 
-                DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-                DataInputStream in = new DataInputStream(socket.getInputStream());
+                DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
 
-                // --- Handshake ---
-                ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
-                DataOutputStream handshake = new DataOutputStream(handshakeBuf);
-                writeVarInt(handshake, 0x00);
-                writeVarInt(handshake, 774); 
-                writeString(handshake, "127.0.0.1");
-                handshake.writeShort(mcPort);
-                writeVarInt(handshake, 2); 
-                byte[] handshakeData = handshakeBuf.toByteArray();
-                writeVarInt(out, handshakeData.length);
-                out.write(handshakeData);
+                // ================= Handshake =================
+                ByteArrayOutputStream hsBuf = new ByteArrayOutputStream();
+                DataOutputStream hs = new DataOutputStream(hsBuf);
+                writeVarInt(hs, 0x00);
+                writeVarInt(hs, 774);
+                writeString(hs, "127.0.0.1");
+                hs.writeShort(mcPort);
+                writeVarInt(hs, 2);
+                sendRaw(out, hsBuf.toByteArray());
 
-                // --- Login ---
+                // ================= Login =================
                 ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
                 DataOutputStream login = new DataOutputStream(loginBuf);
                 writeVarInt(login, 0x00);
                 writeString(login, playerName);
-                java.util.UUID playerUUID = java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
-                login.writeLong(playerUUID.getMostSignificantBits());
-                login.writeLong(playerUUID.getLeastSignificantBits());
-                byte[] loginData = loginBuf.toByteArray();
-                writeVarInt(out, loginData.length);
-                out.write(loginData);
-                out.flush();
+                UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
+                login.writeLong(uuid.getMostSignificantBits());
+                login.writeLong(uuid.getLeastSignificantBits());
+                sendRaw(out, loginBuf.toByteArray());
 
-                System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                failCount = 0; // 连接成功，清零重试计数
-
-                boolean configPhase = false;
+                boolean compression = false;
+                int threshold = -1;
                 boolean playPhase = false;
-                boolean compressionEnabled = false;
-                int compressionThreshold = -1;
 
+                // ================= Main Loop =================
                 while (running.get() && !socket.isClosed()) {
+                    int packetLength;
                     try {
-                        int packetLength = readVarInt(in);
-                        // 长度合理性检查
-                        if (packetLength < 0 || packetLength > 50000000) { 
-                             throw new java.io.IOException("Bad packet length: " + packetLength);
-                        }
+                        packetLength = readVarInt(in);
+                    } catch (SocketTimeoutException e) {
+                        continue;
+                    }
 
-                        byte[] packetData = null;
-                        
-                        if (compressionEnabled) {
-                            int dataLength = readVarInt(in);
-                            int compressedLength = packetLength - getVarIntSize(dataLength);
-                            
-                            // 【EOF 终极修复】
-                            // 之前用 skipBytes 会 EOF，现在改用 readFully 读到垃圾桶里。
-                            // 无论包多大，只要大于 2MB，我们都把它完整读出来扔掉。
-                            // 这样虽然浪费一点点内存带宽，但绝对不会让 TCP 流错位！
-                            if (compressedLength > 2097152) {
-                                int remaining = compressedLength;
-                                while (remaining > 0) {
-                                    // 分块读取，每次读 trashBuffer 大小
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue; // 丢弃完毕，直接处理下一个包
-                            }
+                    if (packetLength <= 0 || packetLength > 50_000_000) {
+                        throw new IOException("Bad packet length: " + packetLength);
+                    }
 
-                            // 正常的包（<2MB），读入内存
-                            byte[] compressedData = new byte[compressedLength];
-                            in.readFully(compressedData);
+                    byte[] payload = new byte[packetLength];
+                    in.readFully(payload);
 
-                            if (dataLength == 0) {
-                                packetData = compressedData; 
-                            } else {
-                                try {
-                                    java.util.zip.Inflater inflater = new java.util.zip.Inflater();
-                                    inflater.setInput(compressedData);
-                                    packetData = new byte[dataLength];
-                                    inflater.inflate(packetData);
-                                    inflater.end();
-                                } catch (Exception e) {
-                                    continue; 
-                                }
-                            }
+                    DataInputStream pin;
+                    if (compression) {
+                        DataInputStream tmp = new DataInputStream(new ByteArrayInputStream(payload));
+                        int dataLen = readVarInt(tmp);
+                        if (dataLen > 0) {
+                            byte[] comp = tmp.readAllBytes();
+                            Inflater inf = new Inflater();
+                            inf.setInput(comp);
+                            byte[] outBuf = new byte[dataLen];
+                            inf.inflate(outBuf);
+                            inf.end();
+                            pin = new DataInputStream(new ByteArrayInputStream(outBuf));
                         } else {
-                            // 非压缩模式同理
-                            if (packetLength > 2097152) {
-                                int remaining = packetLength;
-                                while (remaining > 0) {
-                                    int amount = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, amount);
-                                    remaining -= amount;
-                                }
-                                continue;
-                            }
-                            packetData = new byte[packetLength];
-                            in.readFully(packetData);
+                            pin = tmp;
                         }
+                    } else {
+                        pin = new DataInputStream(new ByteArrayInputStream(payload));
+                    }
 
-                        if (packetData == null) continue;
+                    int pid = readVarInt(pin);
 
-                        ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
-                        DataInputStream packetIn = new DataInputStream(packetStream);
-                        int packetId = readVarInt(packetIn);
+                    // ================= Login / Config =================
+                    if (!playPhase) {
+                        if (pid == 0x03) { // Set Compression
+                            threshold = readVarInt(pin);
+                            compression = threshold >= 0;
+                        } else if (pid == 0x02) { // Login Success
+                            ByteArrayOutputStream ack = new ByteArrayOutputStream();
+                            DataOutputStream a = new DataOutputStream(ack);
+                            writeVarInt(a, 0x03);
+                            sendPacket(out, ack.toByteArray(), compression, threshold);
 
-                        // ==========================================
-                        //      状态机
-                        // ==========================================
-
-                        if (!playPhase) {
-                            if (!configPhase) {
-                                // Login
-                                if (packetId == 0x03) { 
-                                    compressionThreshold = readVarInt(packetIn);
-                                    compressionEnabled = compressionThreshold >= 0;
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Compression: " + compressionThreshold + ANSI_RESET);
-                                } else if (packetId == 0x02) { 
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
-                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                    DataOutputStream ack = new DataOutputStream(ackBuf);
-                                    writeVarInt(ack, 0x03); 
-                                    sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    configPhase = true;
-
-                                    // Client Settings
-                                    ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
-                                    DataOutputStream info = new DataOutputStream(clientInfoBuf);
-                                    writeVarInt(info, 0x00); 
-                                    writeString(info, "en_US"); 
-                                    info.writeByte(10); 
-                                    writeVarInt(info, 0); 
-                                    info.writeBoolean(true); 
-                                    info.writeByte(127); 
-                                    writeVarInt(info, 1); 
-                                    info.writeBoolean(false); 
-                                    info.writeBoolean(true);
-                                    writeVarInt(info, 0); 
-                                    sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                }
-                            } else {
-                                // Config
-                                if (packetId == 0x03) { // Finish
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
-                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                    DataOutputStream ack = new DataOutputStream(ackBuf);
-                                    writeVarInt(ack, 0x03);
-                                    sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    playPhase = true; 
-                                } else if (packetId == 0x04) { // KeepAlive
-                                    long id = packetIn.readLong();
-                                    ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                    DataOutputStream ack = new DataOutputStream(ackBuf);
-                                    writeVarInt(ack, 0x04);
-                                    ack.writeLong(id);
-                                    sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                } else if (packetId == 0x0E) { // Known Packs
-                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                    DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, 0x07); 
-                                    writeVarInt(bufOut, 0);
-                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                }
-                            }
-                        } else {
-                            // --- Play Phase ---
-                            
-                            // 监听 Clientbound KeepAlive (0x26)
-                            if (packetId == 0x26) { 
-                                if (packetIn.available() >= 8) {
-                                    long keepAliveId = packetIn.readLong();
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat 0x26 -> " + keepAliveId + ANSI_RESET);
-                                    
-                                    // 回复 Serverbound KeepAlive (0x1B)
-                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                    DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, 0x1B); 
-                                    bufOut.writeLong(keepAliveId);
-                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                }
-                            }
-                            // Kick
-                            else if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                System.out.println(ANSI_RED + "[FakePlayer] Kicked." + ANSI_RESET);
-                                break; 
-                            }
+                            ByteArrayOutputStream info = new ByteArrayOutputStream();
+                            DataOutputStream i = new DataOutputStream(info);
+                            writeVarInt(i, 0x00);
+                            writeString(i, "en_US");
+                            i.writeByte(10);
+                            writeVarInt(i, 0);
+                            i.writeBoolean(true);
+                            i.writeByte(127);
+                            writeVarInt(i, 1);
+                            i.writeBoolean(false);
+                            i.writeBoolean(true);
+                            writeVarInt(i, 0);
+                            sendPacket(out, info.toByteArray(), compression, threshold);
+                        } else if (pid == 0x03) { // Config Finish
+                            ByteArrayOutputStream ack = new ByteArrayOutputStream();
+                            DataOutputStream a = new DataOutputStream(ack);
+                            writeVarInt(a, 0x03);
+                            sendPacket(out, ack.toByteArray(), compression, threshold);
+                            playPhase = true;
+                            System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Entered Play Phase" + ANSI_RESET);
                         }
+                        continue;
+                    }
 
-                    } catch (java.net.SocketTimeoutException e) {
-                         continue; // 心跳超时，继续
-                    } catch (java.io.EOFException e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] EOF detected" + ANSI_RESET);
-                        break;
-                    } catch (Exception e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
+                    // ================= Play Phase =================
+                    if (pid == 0x26) { // Clientbound KeepAlive
+                        long id = pin.readLong();
+                        ByteArrayOutputStream pong = new ByteArrayOutputStream();
+                        DataOutputStream p = new DataOutputStream(pong);
+                        writeVarInt(p, 0x1B);
+                        p.writeLong(id);
+                        sendPacket(out, pong.toByteArray(), compression, threshold);
+                        System.out.println(ANSI_GREEN + "[FakePlayer] KeepAlive OK" + ANSI_RESET);
+                    } 
+                    else if (pid == 0x1D || pid == 0x00) { // Disconnect
+                        System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server" + ANSI_RESET);
                         break;
                     }
+                    // ⚠️ 其他 Play 包：已完整读取，直接忽略（这是稳定的关键）
                 }
 
-                if (socket != null) socket.close();
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
-                Thread.sleep(10000);
-
             } catch (Exception e) {
-                failCount++;
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Connection Failed: " + e.getMessage() + ANSI_RESET);
-                try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
+                System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
             }
+
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException ignored) {}
         }
     });
 
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
+
 
 
 
