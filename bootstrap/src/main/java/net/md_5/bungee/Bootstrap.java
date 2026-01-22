@@ -684,7 +684,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                 DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                 writeVarInt(handshake, 0x00);
-                writeVarInt(handshake, 774); // Protocol 774 (1.21.4)
+                writeVarInt(handshake, 774); 
                 writeString(handshake, "127.0.0.1");
                 handshake.writeShort(mcPort);
                 writeVarInt(handshake, 2); 
@@ -751,7 +751,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                             if (!playPhase) {
                                 // --- Login & Config Phase ---
-                                
                                 if (!configPhase) {
                                     // *** Login Phase ***
                                     if (packetId == 0x03) { // Compression
@@ -760,16 +759,14 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled: " + compressionThreshold + ANSI_RESET);
                                     } else if (packetId == 0x02) { // Login Success
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success -> Entering Config Phase" + ANSI_RESET);
-                                        
-                                        // 1. 回复 Login Ack (SB 0x03)
+                                        // 1. Reply Login Ack
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03); 
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        
                                         configPhase = true;
 
-                                        // 2. 发送 Client Information (SB 0x00) - 包含 1.21.4 粒子字段
+                                        // 2. Send Client Info (With Particle Status)
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00); 
@@ -781,65 +778,57 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         writeVarInt(info, 1); 
                                         info.writeBoolean(false); 
                                         info.writeBoolean(true);
-                                        writeVarInt(info, 0); // Particle Status (0=All)
+                                        writeVarInt(info, 0); // Particle Status
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        
                                         System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Settings" + ANSI_RESET);
                                     }
                                 } else {
-                                    // *** Configuration Phase (1.21.4) ***
-                                    
-                                    if (packetId == 0x03) { // [CB] Finish Configuration
+                                    // *** Config Phase ***
+                                    if (packetId == 0x03) { // Finish Config
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished -> Entering Play Phase" + ANSI_RESET);
-                                        
-                                        // 回复 Finish Configuration (SB 0x03)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        
                                         playPhase = true; 
-                                        
-                                    } else if (packetId == 0x04) { // [CB] Keep Alive (Config)
+                                    } else if (packetId == 0x04) { // Config Keep Alive
                                         long id = packetIn.readLong();
-                                        // 回复 Keep Alive (SB 0x04)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x04);
                                         ack.writeLong(id);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        
-                                    } else if (packetId == 0x0E) { // [CB] Select Known Packs (1.21.4)
-                                        // 【关键新增】服务器问我们知道什么包，必须回答，否则卡死
-                                        // 回复 Serverbound Known Packs (0x07)
-                                        // 格式: Count (VarInt) -> 我们发 0，表示只用原版
+                                    } else if (packetId == 0x0E) { // Known Packs
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                         DataOutputStream bufOut = new DataOutputStream(buf);
                                         writeVarInt(bufOut, 0x07); 
-                                        writeVarInt(bufOut, 0); // Count = 0
+                                        writeVarInt(bufOut, 0);
                                         sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Known Packs (0)" + ANSI_RESET);
                                     }
                                 }
                             } else {
                                 // --- Play Phase ---
                                 
-                                // 【Play Phase Keep Alive 探测】
-                                // 1.21.4 探测逻辑
-                                if (packetIn.available() == 8) {
-                                    try {
-                                        long keepAliveId = packetIn.readLong();
-                                        if (packetId > 0x10 && packetId < 0x60) {
-                                            System.out.println(ANSI_GREEN + "[FakePlayer] KeepAlive Ping (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
+                                // 【Play Phase Keep Alive 修复】
+                                // 你的服务器在 1.21.4 环境下，Clientbound Keep Alive 似乎是 0x2B (或者 0x26)
+                                // 我们只针对这特定的包 ID 进行回复，避免误回 0x4A 导致崩溃
+                                
+                                if (packetId == 0x26 || packetId == 0x2B || packetId == 0x3E) {
+                                    if (packetIn.available() >= 8) {
+                                        try {
+                                            long keepAliveId = packetIn.readLong();
+                                            System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                             
-                                            // 回复 0x18
+                                            // 统一回复 Serverbound ID: 0x18
                                             ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                             DataOutputStream bufOut = new DataOutputStream(buf);
                                             writeVarInt(bufOut, 0x18); 
                                             bufOut.writeLong(keepAliveId);
                                             sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        } catch (Exception e) {
+                                            // 忽略读取错误
                                         }
-                                    } catch (Exception ignored) {}
+                                    }
                                 }
 
                                 // 踢出检测
@@ -864,13 +853,13 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 }
 
                 if (socket != null) socket.close();
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Reconnecting in 15s..." + ANSI_RESET);
-                Thread.sleep(15000);
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Reconnecting in 10s..." + ANSI_RESET);
+                Thread.sleep(10000);
 
             } catch (Exception e) {
                 failCount++;
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Connect fail (" + failCount + "): " + e.getMessage() + ANSI_RESET);
-                try { Thread.sleep(15000); } catch (InterruptedException ex) { break; }
+                try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
             }
         }
     });
@@ -878,7 +867,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
-
 
 
 
