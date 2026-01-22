@@ -661,7 +661,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Memory Buffer Mode)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Fixed Compilation)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
@@ -672,7 +672,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
 
                 socket = new Socket();
-                socket.setReceiveBufferSize(1024 * 1024 * 10); // 设置 10MB 接收缓存
+                socket.setReceiveBufferSize(1024 * 1024 * 10); // 10MB Buffer
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                 socket.setSoTimeout(30000); 
 
@@ -713,18 +713,17 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 while (running.get() && !socket.isClosed()) {
                     try {
-                        // 1. 读取包总长度
+                        // 1. 读取包长度
                         int packetLength = readVarInt(in);
                         if (packetLength < 0 || packetLength > 50000000) { 
                              throw new java.io.IOException("Bad size: " + packetLength);
                         }
 
-                        // 2. 【核心修复】将整个包的内容从网线“搬”到内存里
-                        // 无论它是什么包，先存下来。这样 socket 流就干净了，随时可以读下一个包。
+                        // 2. 读入内存
                         byte[] rawPacketData = new byte[packetLength];
-                        in.readFully(rawPacketData); // 必须读满，少一个字节都不行
+                        in.readFully(rawPacketData);
 
-                        // 3. 在内存中分析这个包
+                        // 3. 分析
                         ByteArrayInputStream packetStream = new ByteArrayInputStream(rawPacketData);
                         DataInputStream packetIn = new DataInputStream(packetStream);
                         
@@ -732,21 +731,15 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                         if (compressionEnabled) {
                             int dataLength = readVarInt(packetIn);
-                            // dataLength == 0 表示未压缩
                             if (dataLength == 0) {
-                                // 剩余的数据就是包内容
                                 int remaining = packetIn.available();
                                 finalPacketData = new byte[remaining];
                                 packetIn.readFully(finalPacketData);
                             } else {
-                                // 需要解压
-                                // 【性能优化】如果解压后大小 > 4KB，直接忽略
-                                // 我们只需要处理 KeepAlive(很小)，不需要处理地图(很大)
-                                if (dataLength > 4096) {
-                                    finalPacketData = null; // 扔掉
+                                if (dataLength > 8192) {
+                                    finalPacketData = null; // 忽略大包
                                 } else {
                                     try {
-                                        // 读取剩下的压缩数据
                                         int compressedSize = packetIn.available();
                                         byte[] compressedData = new byte[compressedSize];
                                         packetIn.readFully(compressedData);
@@ -762,14 +755,11 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 }
                             }
                         } else {
-                            // 非压缩，直接用
                             finalPacketData = rawPacketData;
                         }
 
-                        // 如果是大包被扔掉了，或者解压失败，直接跳过处理逻辑
                         if (finalPacketData == null) continue;
 
-                        // 4. 解析包 ID
                         ByteArrayInputStream finalStream = new ByteArrayInputStream(finalPacketData);
                         DataInputStream finalIn = new DataInputStream(finalStream);
                         int packetId = readVarInt(finalIn);
@@ -780,7 +770,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                         if (!playPhase) {
                             if (!configPhase) {
-                                // Login Phase
+                                // Login
                                 if (packetId == 0x03) { 
                                     compressionThreshold = readVarInt(finalIn);
                                     compressionEnabled = compressionThreshold >= 0;
@@ -809,7 +799,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                     sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                             } else {
-                                // Config Phase
+                                // Config
                                 if (packetId == 0x03) { // Finish
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                     ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -849,8 +839,8 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                             }
-                            // Kick
-                            else if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
+                            // Kick (修复了变量名错误)
+                            else if (packetId == 0x1D || (packetId == 0x00 && finalPacketData.length > 3)) { 
                                 System.out.println(ANSI_RED + "[FakePlayer] Kicked." + ANSI_RESET);
                                 break; 
                             }
