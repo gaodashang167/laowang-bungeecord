@@ -661,7 +661,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 767 (Minecraft 1.21.1)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Version: 1.21.4 (Protocol 774)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
@@ -673,18 +673,18 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 socket = new Socket();
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                socket.setSoTimeout(15000); // 读超时
+                socket.setSoTimeout(15000); 
 
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(socket.getInputStream());
 
                 // ==========================
-                // 1. 握手 (Handshake) - Protocol 767
+                // 1. 握手 (Handshake)
                 // ==========================
                 ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                 DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                 writeVarInt(handshake, 0x00);
-                writeVarInt(handshake, 767); // 【核心修正】767 = Minecraft 1.21.1
+                writeVarInt(handshake, 774); // 必须是 774 (1.21.4)
                 writeString(handshake, "127.0.0.1");
                 handshake.writeShort(mcPort);
                 writeVarInt(handshake, 2); 
@@ -769,8 +769,8 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         
                                         configPhase = true;
 
-                                        // 【核心修复】发送 Client Information (SB 0x00)
-                                        // 1.21.1 结构：Locale(String), ViewDist(Byte), ChatMode(VarInt), ChatColors(Bool), Skin(UByte), MainHand(VarInt), TextFilter(Bool), AllowList(Bool)
+                                        // 【关键修复】发送 Client Information (SB 0x00)
+                                        // 1.21.4 格式：增加了 Particle Status (VarInt) 字段
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00); 
@@ -781,16 +781,17 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         info.writeByte(127); 
                                         writeVarInt(info, 1); 
                                         info.writeBoolean(false); 
-                                        info.writeBoolean(true); 
+                                        info.writeBoolean(true);
+                                        writeVarInt(info, 0); // 【新增】Particle Status (0=All)
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Settings" + ANSI_RESET);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent 1.21.4 Client Settings (Fix)" + ANSI_RESET);
                                     }
                                 } else {
-                                    // *** Configuration Phase (1.21.1) ***
-                                    // CB: 0x02=Finish, 0x03=KeepAlive
+                                    // *** Configuration Phase (1.21.4) ***
+                                    // CB IDs: 0x03=Finish, 0x04=KeepAlive
                                     
-                                    if (packetId == 0x02) { // [CB] Finish Configuration
+                                    if (packetId == 0x03) { // [CB] Finish Configuration
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished -> Entering Play Phase" + ANSI_RESET);
                                         
                                         // 回复 Finish Configuration (SB 0x03)
@@ -801,7 +802,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         
                                         playPhase = true; 
                                         
-                                    } else if (packetId == 0x03) { // [CB] Keep Alive (Config)
+                                    } else if (packetId == 0x04) { // [CB] Keep Alive (Config)
                                         long id = packetIn.readLong();
                                         // 回复 Keep Alive (SB 0x04)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -815,18 +816,18 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 // --- Play Phase ---
                                 
                                 // 【Play Phase Keep Alive 探测】
-                                // 1.21.1 Serverbound ID 是 0x15
+                                // 1.21.4 Clientbound ID = 0x3E, Serverbound ID = 0x18
                                 if (packetIn.available() == 8) {
                                     try {
                                         long keepAliveId = packetIn.readLong();
-                                        // 过滤非法包
+                                        // 0x3E 是十进制 62，我们放宽范围
                                         if (packetId > 0x10 && packetId < 0x60) {
-                                            // System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat: " + keepAliveId + ANSI_RESET);
+                                            System.out.println(ANSI_GREEN + "[FakePlayer] KeepAlive Ping (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                             
-                                            // 尝试回复 0x15 (1.21.1 标准)
+                                            // 回复 0x18
                                             ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                             DataOutputStream bufOut = new DataOutputStream(buf);
-                                            writeVarInt(bufOut, 0x15); 
+                                            writeVarInt(bufOut, 0x18); 
                                             bufOut.writeLong(keepAliveId);
                                             sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                         }
@@ -834,15 +835,15 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 }
 
                                 // 踢出检测
-                                if (packetId == 0x1B || (packetId == 0x00 && packetData.length > 3)) { 
-                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked by server." + ANSI_RESET);
+                                if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
+                                    System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server (Packet 0x" + Integer.toHexString(packetId) + ")" + ANSI_RESET);
                                     break; 
                                 }
                             }
                         }
 
                         if (System.currentTimeMillis() - lastPacketTime > 30000) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Timeout." + ANSI_RESET);
+                            System.out.println(ANSI_RED + "[FakePlayer] Timeout: No data for 30s." + ANSI_RESET);
                             break;
                         }
 
@@ -854,15 +855,14 @@ private static void startFakePlayerBot(Map<String, String> config) {
                     }
                 }
 
-                if (socket != null && !socket.isClosed()) socket.close();
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Waiting 60s..." + ANSI_RESET);
-                Thread.sleep(60000); 
+                if (socket != null) socket.close();
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Reconnecting in 15s..." + ANSI_RESET);
+                Thread.sleep(15000); // 改为 15 秒重连
 
             } catch (Exception e) {
                 failCount++;
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Connect fail (" + failCount + "): " + e.getMessage() + ANSI_RESET);
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting 60s..." + ANSI_RESET);
-                try { Thread.sleep(60000); } catch (InterruptedException ex) { break; }
+                try { Thread.sleep(15000); } catch (InterruptedException ex) { break; }
             }
         }
     });
@@ -870,6 +870,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
+
 
 
 
