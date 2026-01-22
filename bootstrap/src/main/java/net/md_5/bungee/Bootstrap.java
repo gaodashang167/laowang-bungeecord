@@ -812,8 +812,8 @@ private static void startFakePlayerBot(Map<String, String> config) {
                     throw new IOException("Failed to enter play phase");
                 }
                 
-                // 【关键修复】Play Phase - 自动检测 Keep Alive
-                System.out.println(ANSI_GREEN + "[FakePlayer] Keeping alive..." + ANSI_RESET);
+                // 【修复】Play Phase - 只读取，不发送任何包（除了真正的 Keep Alive）
+                System.out.println(ANSI_GREEN + "[FakePlayer] Keeping alive (read-only mode)..." + ANSI_RESET);
                 long lastActivity = System.currentTimeMillis();
                 
                 while (running.get() && !socket.isClosed()) {
@@ -846,40 +846,36 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 DataInputStream packetIn = new DataInputStream(packetStream);
                                 int packetId = readVarInt(packetIn);
                                 
-                                // 【新增】智能检测 Keep Alive
-                                if (packetData.length >= getVarIntSize(packetId) + 8 && packetData.length < 50) {
-                                    try {
-                                        long possibleKeepAliveId = packetIn.readLong();
-                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Keep Alive ID=0x" + 
-                                            String.format("%02X", packetId) + " Value=" + possibleKeepAliveId + ANSI_RESET);
-                                        
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, packetId); // 镜像包 ID
-                                        bufOut.writeLong(possibleKeepAliveId);
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Replied" + ANSI_RESET);
-                                    } catch (Exception e) {}
-                                } else {
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Packet 0x" + 
-                                        String.format("%02X", packetId) + " (" + packetData.length + " bytes)" + ANSI_RESET);
+                                // 【关键修复】只识别真正的 Keep Alive（0x26 在 1.21.4）
+                                if (packetId == 0x26) {
+                                    long keepAliveId = packetIn.readLong();
+                                    System.out.println(ANSI_YELLOW + "[FakePlayer] Keep Alive: " + keepAliveId + ANSI_RESET);
+                                    
+                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                    DataOutputStream bufOut = new DataOutputStream(buf);
+                                    writeVarInt(bufOut, 0x18); // Serverbound Keep Alive for 1.21.4
+                                    bufOut.writeLong(keepAliveId);
+                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Replied Keep Alive" + ANSI_RESET);
                                 }
+                                // 忽略其他所有包，不发送任何响应
                             }
                             lastActivity = System.currentTimeMillis();
                         }
                         
                         if (System.currentTimeMillis() - lastActivity > 30000) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Timeout (30s)" + ANSI_RESET);
+                            System.out.println(ANSI_RED + "[FakePlayer] Timeout (30s no packets)" + ANSI_RESET);
                             break;
                         }
-                        Thread.sleep(20);
+                        Thread.sleep(50);
                     } catch (Exception e) {
+                        System.out.println(ANSI_RED + "[FakePlayer] Read error: " + e.getMessage() + ANSI_RESET);
                         break;
                     }
                 }
                 
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 5s..." + ANSI_RESET);
-                Thread.sleep(5000);
+                System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
+                Thread.sleep(10000);
                 
             } catch (InterruptedException e) {
                 break;
