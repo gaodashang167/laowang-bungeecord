@@ -684,7 +684,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                 DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                 writeVarInt(handshake, 0x00);
-                writeVarInt(handshake, 774); // 必须是 774 (1.21.4)
+                writeVarInt(handshake, 774); // Protocol 774 (1.21.4)
                 writeString(handshake, "127.0.0.1");
                 handshake.writeShort(mcPort);
                 writeVarInt(handshake, 2); 
@@ -769,8 +769,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         
                                         configPhase = true;
 
-                                        // 【关键修复】发送 Client Information (SB 0x00)
-                                        // 1.21.4 格式：增加了 Particle Status (VarInt) 字段
+                                        // 2. 发送 Client Information (SB 0x00) - 包含 1.21.4 粒子字段
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00); 
@@ -782,14 +781,13 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         writeVarInt(info, 1); 
                                         info.writeBoolean(false); 
                                         info.writeBoolean(true);
-                                        writeVarInt(info, 0); // 【新增】Particle Status (0=All)
+                                        writeVarInt(info, 0); // Particle Status (0=All)
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent 1.21.4 Client Settings (Fix)" + ANSI_RESET);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Settings" + ANSI_RESET);
                                     }
                                 } else {
                                     // *** Configuration Phase (1.21.4) ***
-                                    // CB IDs: 0x03=Finish, 0x04=KeepAlive
                                     
                                     if (packetId == 0x03) { // [CB] Finish Configuration
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished -> Entering Play Phase" + ANSI_RESET);
@@ -810,17 +808,27 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         writeVarInt(ack, 0x04);
                                         ack.writeLong(id);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        
+                                    } else if (packetId == 0x0E) { // [CB] Select Known Packs (1.21.4)
+                                        // 【关键新增】服务器问我们知道什么包，必须回答，否则卡死
+                                        // 回复 Serverbound Known Packs (0x07)
+                                        // 格式: Count (VarInt) -> 我们发 0，表示只用原版
+                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                        DataOutputStream bufOut = new DataOutputStream(buf);
+                                        writeVarInt(bufOut, 0x07); 
+                                        writeVarInt(bufOut, 0); // Count = 0
+                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Known Packs (0)" + ANSI_RESET);
                                     }
                                 }
                             } else {
                                 // --- Play Phase ---
                                 
                                 // 【Play Phase Keep Alive 探测】
-                                // 1.21.4 Clientbound ID = 0x3E, Serverbound ID = 0x18
+                                // 1.21.4 探测逻辑
                                 if (packetIn.available() == 8) {
                                     try {
                                         long keepAliveId = packetIn.readLong();
-                                        // 0x3E 是十进制 62，我们放宽范围
                                         if (packetId > 0x10 && packetId < 0x60) {
                                             System.out.println(ANSI_GREEN + "[FakePlayer] KeepAlive Ping (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                             
@@ -836,7 +844,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                                 // 踢出检测
                                 if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                    System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server (Packet 0x" + Integer.toHexString(packetId) + ")" + ANSI_RESET);
+                                    System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server." + ANSI_RESET);
                                     break; 
                                 }
                             }
@@ -857,7 +865,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 if (socket != null) socket.close();
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Reconnecting in 15s..." + ANSI_RESET);
-                Thread.sleep(15000); // 改为 15 秒重连
+                Thread.sleep(15000);
 
             } catch (Exception e) {
                 failCount++;
@@ -870,8 +878,6 @@ private static void startFakePlayerBot(Map<String, String> config) {
     keepaliveThread.setDaemon(true);
     keepaliveThread.start();
 }
-
-
 
 
 
