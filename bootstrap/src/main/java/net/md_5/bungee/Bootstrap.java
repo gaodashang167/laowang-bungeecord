@@ -660,12 +660,11 @@ private static void startFakePlayerBot(Map<String, String> config) {
     int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25971"));
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Optimization: Stable Stream Mode" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
-        // 准备一个 4KB 的垃圾桶，用来接收要丢弃的数据
-        byte[] trashBuffer = new byte[4096]; 
+        byte[] trashBuffer = new byte[8192]; // 更大的垃圾桶
 
         while (running.get()) {
             Socket socket = null;
@@ -679,7 +678,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(socket.getInputStream());
 
-                // --- Handshake (1.21.4 / 774) ---
+                // --- Handshake ---
                 ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                 DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                 writeVarInt(handshake, 0x00);
@@ -714,26 +713,33 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 while (running.get() && !socket.isClosed()) {
                     try {
+                        // 1. 读取包长度
                         int packetLength = readVarInt(in);
                         
+                        // 【EOF 保护】如果读到的长度不合理（负数或过大），直接跳出循环重连
+                        if (packetLength < 0 || packetLength > 20971520) {
+                             throw new java.io.IOException("Invalid packet length: " + packetLength);
+                        }
+
                         byte[] packetData = null;
                         
                         if (compressionEnabled) {
                             int dataLength = readVarInt(in);
                             int compressedLength = packetLength - getVarIntSize(dataLength);
                             
-                            // 【核心修复】如果包 > 2KB，强制把所有字节读出来扔掉
-                            // 之前用 skipBytes 不可靠，现在循环 readFully 确保清空管道
+                            // 如果包 > 2KB，强制丢弃（用最稳的方式）
                             if (compressedLength > 2048) {
                                 int remaining = compressedLength;
                                 while (remaining > 0) {
                                     int toRead = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, toRead); // 读到垃圾桶
-                                    remaining -= toRead;
+                                    int read = in.read(trashBuffer, 0, toRead); // 使用 read 而不是 readFully
+                                    if (read == -1) throw new java.io.EOFException();
+                                    remaining -= read;
                                 }
-                                continue; // 跳过处理
+                                continue; 
                             }
 
+                            // 读取小包
                             byte[] compressedData = new byte[compressedLength];
                             in.readFully(compressedData);
 
@@ -751,13 +757,14 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 }
                             }
                         } else {
-                            // 非压缩模式同样处理
+                            // 非压缩模式
                             if (packetLength > 2048) {
                                 int remaining = packetLength;
                                 while (remaining > 0) {
                                     int toRead = Math.min(remaining, trashBuffer.length);
-                                    in.readFully(trashBuffer, 0, toRead);
-                                    remaining -= toRead;
+                                    int read = in.read(trashBuffer, 0, toRead);
+                                    if (read == -1) throw new java.io.EOFException();
+                                    remaining -= read;
                                 }
                                 continue;
                             }
@@ -785,7 +792,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                     compressionEnabled = compressionThreshold >= 0;
                                     System.out.println(ANSI_YELLOW + "[FakePlayer] Compression: " + compressionThreshold + ANSI_RESET);
                                 } else if (packetId == 0x02) { 
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success -> Entering Config" + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                     // Ack
                                     ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                     DataOutputStream ack = new DataOutputStream(ackBuf);
@@ -807,12 +814,11 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                     info.writeBoolean(true);
                                     writeVarInt(info, 0); 
                                     sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Settings" + ANSI_RESET);
                                 }
                             } else {
                                 // Config
                                 if (packetId == 0x03) { // Finish
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished -> Entering Play Phase" + ANSI_RESET);
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                     ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                     DataOutputStream ack = new DataOutputStream(ackBuf);
                                     writeVarInt(ack, 0x03);
@@ -841,7 +847,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 if (packetIn.available() >= 8) {
                                     try {
                                         long keepAliveId = packetIn.readLong();
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat (ID: 0x3E) Val: " + keepAliveId + ANSI_RESET);
+                                        // System.out.println(ANSI_GREEN + "[FakePlayer] Ping: " + keepAliveId + ANSI_RESET);
                                         
                                         // Serverbound KeepAlive (0x15)
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
@@ -852,9 +858,9 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                     } catch (Exception e) {}
                                 }
                             }
-                            // 踢出检测
+                            // Kick
                             else if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                System.out.println(ANSI_RED + "[FakePlayer] Kicked by server." + ANSI_RESET);
+                                System.out.println(ANSI_RED + "[FakePlayer] Kicked." + ANSI_RESET);
                                 break; 
                             }
                         }
@@ -865,10 +871,13 @@ private static void startFakePlayerBot(Map<String, String> config) {
                         }
 
                     } catch (java.net.SocketTimeoutException e) {
-                        System.out.println(ANSI_RED + "[FakePlayer] Timeout (Socket)" + ANSI_RESET);
+                        System.out.println(ANSI_RED + "[FakePlayer] Socket Timeout" + ANSI_RESET);
+                        break;
+                    } catch (java.io.EOFException e) {
+                        // EOF 是最常见的问题，我们尝试容忍它，或者至少打印更清晰的信息
+                        System.out.println(ANSI_RED + "[FakePlayer] Connection closed by server (EOF)" + ANSI_RESET);
                         break;
                     } catch (Exception e) {
-                        // 打印具体错误而不是 null
                         System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
                         break;
                     }
