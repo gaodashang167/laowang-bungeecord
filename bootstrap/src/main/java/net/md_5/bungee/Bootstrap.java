@@ -661,7 +661,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
     System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
     System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-    System.out.println(ANSI_GREEN + "[FakePlayer] Version: 1.21.11 (Protocol 774)" + ANSI_RESET);
+    System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 767 (Minecraft 1.21.1)" + ANSI_RESET);
 
     keepaliveThread = new Thread(() -> {
         int failCount = 0;
@@ -673,18 +673,18 @@ private static void startFakePlayerBot(Map<String, String> config) {
 
                 socket = new Socket();
                 socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                socket.setSoTimeout(15000);
+                socket.setSoTimeout(15000); // 读超时
 
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 DataInputStream in = new DataInputStream(socket.getInputStream());
 
                 // ==========================
-                // 1. 握手 (Handshake)
+                // 1. 握手 (Handshake) - Protocol 767
                 // ==========================
                 ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                 DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                 writeVarInt(handshake, 0x00);
-                writeVarInt(handshake, 774); // 1.21.x Protocol (Compatible with 1.21.11)
+                writeVarInt(handshake, 767); // 【核心修正】767 = Minecraft 1.21.1
                 writeString(handshake, "127.0.0.1");
                 handshake.writeShort(mcPort);
                 writeVarInt(handshake, 2); 
@@ -754,14 +754,14 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 
                                 if (!configPhase) {
                                     // *** Login Phase ***
-                                    if (packetId == 0x03) { // Set Compression
+                                    if (packetId == 0x03) { // Compression
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Compression enabled: " + compressionThreshold + ANSI_RESET);
                                     } else if (packetId == 0x02) { // Login Success
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success -> Entering Config Phase" + ANSI_RESET);
                                         
-                                        // 1. 回复 Login Acknowledged (SB 0x03)
+                                        // 1. 回复 Login Ack (SB 0x03)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03); 
@@ -769,27 +769,28 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         
                                         configPhase = true;
 
-                                        // 【关键修复】2. 必须立即发送 Client Information (SB 0x00)
-                                        // 否则服务器不会发送后续数据，导致卡死超时
+                                        // 【核心修复】发送 Client Information (SB 0x00)
+                                        // 1.21.1 结构：Locale(String), ViewDist(Byte), ChatMode(VarInt), ChatColors(Bool), Skin(UByte), MainHand(VarInt), TextFilter(Bool), AllowList(Bool)
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
-                                        writeVarInt(info, 0x00); // Packet ID 0x00 (Serverbound Config)
-                                        writeString(info, "en_US"); // Locale
-                                        info.writeByte(10); // View Distance
-                                        writeVarInt(info, 0); // Chat Mode
-                                        info.writeBoolean(true); // Chat Colors
-                                        info.writeByte(127); // Skin Parts
-                                        writeVarInt(info, 1); // Main Hand
-                                        info.writeBoolean(false); // Text Filtering
-                                        info.writeBoolean(true); // Allow Server Listings
+                                        writeVarInt(info, 0x00); 
+                                        writeString(info, "en_US"); 
+                                        info.writeByte(10); 
+                                        writeVarInt(info, 0); 
+                                        info.writeBoolean(true); 
+                                        info.writeByte(127); 
+                                        writeVarInt(info, 1); 
+                                        info.writeBoolean(false); 
+                                        info.writeBoolean(true); 
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Information (Fix for Timeout)" + ANSI_RESET);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] -> Sent Client Settings" + ANSI_RESET);
                                     }
                                 } else {
-                                    // *** Configuration Phase (1.21.x) ***
+                                    // *** Configuration Phase (1.21.1) ***
+                                    // CB: 0x02=Finish, 0x03=KeepAlive
                                     
-                                    if (packetId == 0x03) { // [CB] Finish Configuration
+                                    if (packetId == 0x02) { // [CB] Finish Configuration
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished -> Entering Play Phase" + ANSI_RESET);
                                         
                                         // 回复 Finish Configuration (SB 0x03)
@@ -800,7 +801,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                         
                                         playPhase = true; 
                                         
-                                    } else if (packetId == 0x04) { // [CB] Keep Alive (Config)
+                                    } else if (packetId == 0x03) { // [CB] Keep Alive (Config)
                                         long id = packetIn.readLong();
                                         // 回复 Keep Alive (SB 0x04)
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -814,19 +815,18 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 // --- Play Phase ---
                                 
                                 // 【Play Phase Keep Alive 探测】
-                                // 1.21.11 Serverbound Keep Alive ID 通常是 0x18 或 0x15
-                                // 探测法：只要包剩余长度为 8 字节，就认为是 Keep Alive
+                                // 1.21.1 Serverbound ID 是 0x15
                                 if (packetIn.available() == 8) {
                                     try {
                                         long keepAliveId = packetIn.readLong();
-                                        // 过滤掉包 ID 过大的（防止误判）
+                                        // 过滤非法包
                                         if (packetId > 0x10 && packetId < 0x60) {
                                             // System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat: " + keepAliveId + ANSI_RESET);
                                             
-                                            // 尝试回复 0x18 (1.21+ 标准)
+                                            // 尝试回复 0x15 (1.21.1 标准)
                                             ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                             DataOutputStream bufOut = new DataOutputStream(buf);
-                                            writeVarInt(bufOut, 0x18); 
+                                            writeVarInt(bufOut, 0x15); 
                                             bufOut.writeLong(keepAliveId);
                                             sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                         }
@@ -834,15 +834,15 @@ private static void startFakePlayerBot(Map<String, String> config) {
                                 }
 
                                 // 踢出检测
-                                if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                    System.out.println(ANSI_RED + "[FakePlayer] Disconnected by server." + ANSI_RESET);
+                                if (packetId == 0x1B || (packetId == 0x00 && packetData.length > 3)) { 
+                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked by server." + ANSI_RESET);
                                     break; 
                                 }
                             }
                         }
 
                         if (System.currentTimeMillis() - lastPacketTime > 30000) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Timeout: Server stopped sending data." + ANSI_RESET);
+                            System.out.println(ANSI_RED + "[FakePlayer] Timeout." + ANSI_RESET);
                             break;
                         }
 
@@ -854,7 +854,7 @@ private static void startFakePlayerBot(Map<String, String> config) {
                     }
                 }
 
-                if (socket != null) socket.close();
+                if (socket != null && !socket.isClosed()) socket.close();
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Disconnected. Waiting 60s..." + ANSI_RESET);
                 Thread.sleep(60000); 
 
