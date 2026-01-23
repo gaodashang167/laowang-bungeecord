@@ -212,12 +212,12 @@ public class Bootstrap
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "b2719246-3982-48b3-84b3-51b6aa4595be");
-        config.put("HY2_PASSWORD", "b2719246-3982-48b3-84b3-51b6aa4595be");  
+        config.put("UUID", "eb339dd3-69a2-4b5d-8d73-6c06240387c1");
+        config.put("HY2_PASSWORD", "eb339dd3-69a2-4b5d-8d73-6c06240387c1");  
         config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");  // 【重要】启用混淆增强隐蔽性
-        config.put("UDP_PORT", "34993");  // 单端口
+        config.put("UDP_PORT", "50476");  // 单端口
         config.put("HY2_PORTS", "");  // 跳跃端口范围（可选）
-        config.put("DOMAIN", "free.minecraft-hoster.com");
+        config.put("DOMAIN", "51.77.85.56");
         config.put("HY2_SNI", "www.bing.com");  // TLS SNI - 伪装成访问必应
         config.put("HY2_ALPN", "h3");  // ALPN 协议
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -228,10 +228,10 @@ public class Bootstrap
         config.put("MC_JAR", "server99.jar");  // MC 服务器 jar 文件名，如 "paper-1.19.4.jar"，留空则不启动
         config.put("MC_MEMORY", "512M");  // 默认分配 512MB 内存
         config.put("MC_ARGS", "");  // 额外 JVM 参数，如 "-XX:+UseG1GC"
-        config.put("MC_PORT", "34993");  // MC 服务器端口（从环境变量读取）
+        config.put("MC_PORT", "50476");  // MC 服务器端口（从环境变量读取）
         // Minecraft 保活配置 - 模拟玩家连接
         config.put("MC_KEEPALIVE_HOST", "");  // 留空禁用简单 ping
-        config.put("MC_KEEPALIVE_PORT", "34993");
+        config.put("MC_KEEPALIVE_PORT", "50476");
         // 真实假玩家配置（推荐）
         config.put("FAKE_PLAYER_ENABLED", "true");  // 启用真实假玩家
         config.put("FAKE_PLAYER_NAME", "labubu");  // 假玩家名称
@@ -619,7 +619,7 @@ public class Bootstrap
     
     private static void waitForServerReady() throws InterruptedException {
         // 从配置中读取 MC 端口
-        int mcPort = 34993; // 默认值
+        int mcPort = 50476; // 默认值
         try {
             String portEnv = System.getenv("MC_PORT");
             if (portEnv != null && !portEnv.isEmpty()) {
