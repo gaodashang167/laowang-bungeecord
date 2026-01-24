@@ -76,8 +76,17 @@ public class Bootstrap
             e.printStackTrace();
         }
 
-        // Continue with BungeeCord launch
-        BungeeCordLauncher.main(args);
+        // Continue with BungeeCord launch (comment out if not needed)
+        // BungeeCordLauncher.main(args);
+        
+        // Keep main thread alive
+        while (running.get()) {
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
     }
     
     private static void clearConsole() {
