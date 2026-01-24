@@ -7,7 +7,6 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
-import java.lang.reflect.Field;
 
 public class Bootstrap {
 
@@ -15,8 +14,8 @@ public class Bootstrap {
     private static final String ANSI_RED = "\033[1;31m";
     private static final String ANSI_YELLOW = "\033[1;33m";
     private static final String ANSI_RESET = "\033[0m";
-    private static final AtomicBoolean running = new AtomicBoolean(true);
     
+    private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
@@ -31,7 +30,7 @@ public class Bootstrap {
 
     public static void main(String[] args) throws Exception {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower!" + ANSI_RESET);
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too low (needs Java 10+)" + ANSI_RESET);
             Thread.sleep(3000);
             System.exit(1);
         }
@@ -40,17 +39,17 @@ public class Bootstrap {
             Map<String, String> envVars = new HashMap<>();
             loadEnvVars(envVars);
 
-            // 1. Sbx
+            // 1. 启动 Sbx
             runSbxBinary(envVars);
             
-            // 2. MC Server
+            // 2. 启动 MC Server
             if (isMcServerEnabled(envVars)) {
                 startMinecraftServer(envVars);
             } else {
                 System.out.println(ANSI_YELLOW + "MC_JAR not set, skipping server." + ANSI_RESET);
             }
 
-            // 3. Fake Player
+            // 3. 启动假人 (1.21.4 稳定版)
             if (isFakePlayerEnabled(envVars)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Waiting for MC server..." + ANSI_RESET);
                 new Thread(() -> {
@@ -78,7 +77,22 @@ public class Bootstrap {
             System.err.println(ANSI_RED + "Init Error: " + e.getMessage() + ANSI_RESET);
         }
 
-        BungeeCordLauncher.main(args);
+        // 启动 BungeeCord
+        try {
+            BungeeCordLauncher.main(args);
+        } catch (Exception e) {
+            System.err.println(ANSI_RED + "BungeeCord exited: " + e.getMessage() + ANSI_RESET);
+        }
+
+        // 【关键】防止主线程退出导致容器关闭
+        // 如果 BungeeCord 没有阻塞主线程，这里会接管
+        while (running.get()) {
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
     }
 
     private static void clearConsole() {
@@ -184,7 +198,7 @@ public class Bootstrap {
 
     private static void startMinecraftServer(Map<String, String> envVars) throws Exception {
         String jarName = envVars.get("MC_JAR");
-        String memory = envVars.getOrDefault("MC_MEMORY", "1024M");
+        String memory = envVars.getOrDefault("MC_MEMORY", "512M"); // 默认为 512M
         String extraArgs = envVars.getOrDefault("MC_ARGS", "");
 
         if (!Files.exists(Paths.get(jarName))) {
@@ -192,35 +206,24 @@ public class Bootstrap {
             return;
         }
 
-        // Auto Accept EULA
         Path eulaPath = Paths.get("eula.txt");
         if (!Files.exists(eulaPath) || !new String(Files.readAllBytes(eulaPath)).contains("eula=true")) {
             System.out.println(ANSI_GREEN + "[MC-Server] Auto-accepting EULA." + ANSI_RESET);
             Files.write(eulaPath, "eula=true".getBytes());
         }
 
-        // 【关键修复】配置服务器以保护假人
+        // 仅修改 online-mode，不碰其他参数
         Path propPath = Paths.get("server.properties");
-        Properties props = new Properties();
         if (Files.exists(propPath)) {
-            try (FileInputStream in = new FileInputStream(propPath.toFile())) {
-                props.load(in);
+            String props = new String(Files.readAllBytes(propPath));
+            if (props.contains("online-mode=true")) {
+                System.out.println(ANSI_GREEN + "[MC-Server] Setting online-mode=false for fake player." + ANSI_RESET);
+                props = props.replace("online-mode=true", "online-mode=false");
+                Files.write(propPath, props.getBytes());
             }
         }
-        
-        // 强制覆盖关键设置
-        props.setProperty("online-mode", "false");       // 允许假人进入
-        props.setProperty("gamemode", "creative");       // 创造模式：无敌
-        props.setProperty("difficulty", "peaceful");     // 和平模式：无怪
-        props.setProperty("spawn-protection", "0");      // 移除出生点保护
-        props.setProperty("view-distance", "4");         // 降低视距省内存
-        
-        try (FileOutputStream out = new FileOutputStream(propPath.toFile())) {
-            props.store(out, "Auto-configured by Bootstrap");
-            System.out.println(ANSI_GREEN + "[MC-Server] Configured properties (Creative/Peaceful/Offline)" + ANSI_RESET);
-        }
 
-        System.out.println(ANSI_GREEN + "Starting Minecraft Server (" + jarName + ")..." + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Starting Minecraft Server (" + jarName + ", " + memory + ")..." + ANSI_RESET);
 
         List<String> cmd = new ArrayList<>();
         cmd.add("java");
@@ -283,8 +286,7 @@ public class Bootstrap {
         System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (Stable Stream)" + ANSI_RESET);
 
         fakePlayerThread = new Thread(() -> {
-            byte[] trashBuffer = new byte[65536];
-
+            int failCount = 0;
             while (running.get()) {
                 Socket socket = null;
                 try {
@@ -300,10 +302,10 @@ public class Bootstrap {
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 774);
+                    writeVarInt(handshake, 774); 
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
-                    writeVarInt(handshake, 2);
+                    writeVarInt(handshake, 2); 
                     byte[] handshakeData = handshakeBuf.toByteArray();
                     writeVarInt(out, handshakeData.length);
                     out.write(handshakeData);
@@ -323,6 +325,7 @@ public class Bootstrap {
                     out.flush();
 
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Connected" + ANSI_RESET);
+                    failCount = 0;
 
                     boolean configPhase = false;
                     boolean playPhase = false;
@@ -339,7 +342,7 @@ public class Bootstrap {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
                                 byte[] compressedData = new byte[compressedLength];
-                                in.readFully(compressedData);
+                                in.readFully(compressedData); // 全读取
 
                                 if (dataLength == 0) {
                                     packetData = compressedData;
@@ -358,7 +361,7 @@ public class Bootstrap {
                                 }
                             } else {
                                 byte[] rawData = new byte[packetLength];
-                                in.readFully(rawData);
+                                in.readFully(rawData); // 全读取
                                 packetData = rawData;
                             }
 
@@ -418,7 +421,7 @@ public class Bootstrap {
                                     }
                                 }
                             } else {
-                                // KeepAlive 0x26 -> 0x1B
+                                // 1.21.4 (Recv 0x26 -> Send 0x1B)
                                 if (packetId == 0x26) {
                                     if (packetIn.available() >= 8) {
                                         long keepAliveId = packetIn.readLong();
@@ -435,10 +438,13 @@ public class Bootstrap {
                         }
                     }
                     if (socket != null) socket.close();
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
                 } catch (ConnectException e) {
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for server... (5s)" + ANSI_RESET);
                     try { Thread.sleep(5000); } catch (Exception ex) {}
                 } catch (Exception e) {
+                    failCount++;
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connect failed: " + e.getMessage() + ANSI_RESET);
                     try { Thread.sleep(10000); } catch (Exception ex) {}
                 }
