@@ -19,7 +19,6 @@ public class Bootstrap
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process xrayProcess;
     private static Process argoProcess;
-    private static Process mcArgoProcess;  // Minecraft 专用 Argo 隧道
     private static Process nezhaProcess;
     private static Process minecraftProcess;
     private static Thread keepaliveThread;
@@ -29,8 +28,7 @@ public class Bootstrap
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT",
         "MC_KEEPALIVE_HOST", "MC_KEEPALIVE_PORT",
-        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME",
-        "MC_ARGO_ENABLED", "MC_ARGO_AUTH", "MC_ARGO_DOMAIN"
+        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
 
     public static void main(String[] args) throws Exception
@@ -51,16 +49,10 @@ public class Bootstrap
             // 3. 启动 Xray (VLESS)
             runXrayService(config);
             
-            // 4. 启动 Cloudflare Argo Tunnel (代理用)
+            // 4. 启动 Cloudflare Argo Tunnel
             String argoUrl = runArgoTunnel(config);
             
-            // 5. 如果启用 MC Argo，为 Minecraft 启动独立隧道
-            String mcArgoUrl = null;
-            if (isMcArgoEnabled(config)) {
-                mcArgoUrl = runMcArgoTunnel(config);
-            }
-            
-            // 6. 生成并显示 VLESS 节点链接
+            // 5. 生成并显示 VLESS 节点链接
             String vlessUrl = generateVlessUrl(config, argoUrl);
             
             System.out.println(ANSI_GREEN + "\n=== VLESS+WS+Argo Configuration ===" + ANSI_RESET);
@@ -69,17 +61,9 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "Argo Domain: " + argoUrl + ANSI_RESET);
             System.out.println(ANSI_GREEN + "\n=== VLESS Node URL ===" + ANSI_RESET);
             System.out.println(ANSI_GREEN + vlessUrl + ANSI_RESET);
-            
-            if (mcArgoUrl != null) {
-                System.out.println(ANSI_GREEN + "\n=== Minecraft Server (via Argo) ===" + ANSI_RESET);
-                System.out.println(ANSI_GREEN + "Server Address: " + mcArgoUrl + ANSI_RESET);
-                System.out.println(ANSI_YELLOW + "Note: Use this domain in your Minecraft client" + ANSI_RESET);
-                System.out.println(ANSI_YELLOW + "      Port: 25565 (default Minecraft port)" + ANSI_RESET);
-            }
-            
             System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
             
-            // 7. 启动真实假玩家（推荐）
+            // 6. 启动真实假玩家（推荐）
             if (isFakePlayerBotEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for MC server to fully start..." + ANSI_RESET);
                 waitForServerReady();
@@ -150,14 +134,6 @@ public class Bootstrap
         
         System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
         
-        // 显示配置信息用于调试
-        String server = config.get("NEZHA_SERVER");
-        String key = config.get("NEZHA_KEY");
-        String tls = config.getOrDefault("NEZHA_TLS", "false");
-        System.out.println(ANSI_YELLOW + "[Nezha] Server: " + server + ANSI_RESET);
-        System.out.println(ANSI_YELLOW + "[Nezha] TLS: " + tls + ANSI_RESET);
-        System.out.println(ANSI_YELLOW + "[Nezha] Key: " + key.substring(0, Math.min(8, key.length())) + "..." + ANSI_RESET);
-        
         List<String> cmd = new ArrayList<>();
         cmd.add(nezhaPath.toString());
         cmd.add("-c");
@@ -167,10 +143,6 @@ public class Bootstrap
         pb.directory(nezhaDir.toFile());
         pb.redirectErrorStream(true);
         
-        // 设置环境变量，增加超时时间
-        Map<String, String> env = pb.environment();
-        env.put("NEZHA_AGENT_TIMEOUT", "30");
-        
         nezhaProcess = pb.start();
         
         new Thread(() -> {
@@ -178,13 +150,14 @@ public class Bootstrap
                     new InputStreamReader(nezhaProcess.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 显示所有日志，方便调试
-                    System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
+                    if (line.contains("NEZHA") || line.contains("error") || line.contains("Error")) {
+                        System.out.println(ANSI_GREEN + "[Nezha] " + ANSI_RESET + line);
+                    }
                 }
             } catch (IOException e) {}
         }).start();
         
-        Thread.sleep(2000);
+        Thread.sleep(1000);
         if (!nezhaProcess.isAlive()) {
              System.out.println(ANSI_RED + "Nezha Agent exited prematurely: " + nezhaProcess.exitValue() + ANSI_RESET);
         }
@@ -289,96 +262,12 @@ public class Bootstrap
         return detectedUrl[0] != null ? detectedUrl[0] : "tunnel-not-ready.trycloudflare.com";
     }
     
-    private static boolean isMcArgoEnabled(Map<String, String> config) {
-        String enabled = config.get("MC_ARGO_ENABLED");
-        return enabled != null && enabled.equalsIgnoreCase("true");
-    }
-    
-    private static String runMcArgoTunnel(Map<String, String> config) throws Exception {
-        Path cloudflaredPath = downloadCloudflared();
-        
-        // 获取 MC 端口，默认 25565
-        String mcPortStr = config.get("MC_PORT");
-        int mcPort = 25565;
-        if (mcPortStr != null && !mcPortStr.trim().isEmpty()) {
-            try {
-                mcPort = Integer.parseInt(mcPortStr.trim());
-            } catch (NumberFormatException e) {
-                System.out.println(ANSI_YELLOW + "[MC-Argo] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
-            }
-        }
-        
-        String mcArgoAuth = config.get("MC_ARGO_AUTH");
-        String mcArgoDomain = config.get("MC_ARGO_DOMAIN");
-        
-        System.out.println(ANSI_GREEN + "Starting Minecraft Argo Tunnel..." + ANSI_RESET);
-        System.out.println(ANSI_YELLOW + "[MC-Argo] Exposing local port " + mcPort + " via Cloudflare Tunnel" + ANSI_RESET);
-        
-        List<String> cmd = new ArrayList<>();
-        cmd.add(cloudflaredPath.toString());
-        cmd.add("tunnel");
-        
-        // 如果提供了认证信息，使用命名隧道
-        if (mcArgoAuth != null && !mcArgoAuth.trim().isEmpty()) {
-            cmd.add("--edge-ip-version");
-            cmd.add("auto");
-            cmd.add("--protocol");
-            cmd.add("http2");
-            cmd.add("run");
-            cmd.add("--token");
-            cmd.add(mcArgoAuth);
-        } else {
-            // 使用临时隧道
-            cmd.add("--url");
-            cmd.add("tcp://127.0.0.1:" + mcPort);  // TCP 模式用于 Minecraft
-            cmd.add("--no-autoupdate");
-        }
-        
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.redirectErrorStream(true);
-        
-        mcArgoProcess = pb.start();
-        
-        final String[] detectedUrl = {mcArgoDomain != null && !mcArgoDomain.isEmpty() ? mcArgoDomain : null};
-        
-        new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(mcArgoProcess.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    System.out.println(ANSI_YELLOW + "[MC-Argo] " + ANSI_RESET + line);
-                    
-                    // 提取临时隧道 URL
-                    if (detectedUrl[0] == null && line.contains("trycloudflare.com")) {
-                        String[] parts = line.split("\\s+");
-                        for (String part : parts) {
-                            if (part.contains("trycloudflare.com")) {
-                                detectedUrl[0] = part.replace("https://", "").replace("http://", "");
-                                System.out.println(ANSI_GREEN + "[MC-Argo] Minecraft Tunnel URL: " + detectedUrl[0] + ANSI_RESET);
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch (IOException e) {}
-        }).start();
-        
-        // 等待隧道建立
-        Thread.sleep(8000);
-        
-        if (!mcArgoProcess.isAlive()) {
-            System.out.println(ANSI_RED + "[MC-Argo] Tunnel exited prematurely: " + mcArgoProcess.exitValue() + ANSI_RESET);
-        }
-        
-        return detectedUrl[0] != null ? detectedUrl[0] : "mc-tunnel-not-ready.trycloudflare.com";
-    }
-    
     private static Map<String, String> loadConfig() {
         Map<String, String> config = new HashMap<>();
         // 默认配置
-        config.put("UUID", "677a8a0b-7234-4903-bd73-74ecbe4cf7df");
+        config.put("UUID", "66e6c6f4-55fb-4710-a7c7-d92586954390");
         config.put("VLESS_PORT", "8001");  // Xray 监听端口
-        config.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiYjQxZDJlZDgtZmFlMi00MjZiLTk1MGMtMjc5YWQ0MDY4OTUyIiwicyI6IllUZG1PVFUyTW1VdE0yTTVaaTAwWWpRd0xUaGpPRFF0TlRRMllXRTBaRFEzWm1KaCJ9");  // Argo 隧道 token（留空使用临时隧道）
+        config.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiOGVkYWEzMzItOGI5Ny00NmM2LTk5Y2UtMWIxYWRmMzQ2NDg2IiwicyI6IlpXTTJNekF6TXpBdE16QXdaaTAwTUdReUxXSmtaVGt0TnpZek9HVTFaV0kzWW1ZMCJ9");  // Argo 隧道 token（留空使用临时隧道）
         config.put("ARGO_DOMAIN", "swiftservers.svip888.us.kg");  // 自定义域名（留空使用临时域名）
         config.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         config.put("NEZHA_PORT", "");
@@ -388,10 +277,10 @@ public class Bootstrap
         config.put("MC_JAR", "server99.jar");
         config.put("MC_MEMORY", "512M");
         config.put("MC_ARGS", "");
-        config.put("MC_PORT", "25565");
+        config.put("MC_PORT", "25716");
         // Minecraft 保活配置
         config.put("MC_KEEPALIVE_HOST", "");
-        config.put("MC_KEEPALIVE_PORT", "25565");
+        config.put("MC_KEEPALIVE_PORT", "25716");
         // 真实假玩家配置
         config.put("FAKE_PLAYER_ENABLED", "true");
         config.put("FAKE_PLAYER_NAME", "labubu");
@@ -470,11 +359,7 @@ public class Bootstrap
     private static Path createNezhaConfig(Map<String, String> config) throws IOException {
         String server = config.get("NEZHA_SERVER");
         String port = config.getOrDefault("NEZHA_PORT", "5555");
-        
-        // 确保服务器地址格式正确
-        if (!server.contains(":")) {
-            server += ":" + port;
-        }
+        if (!server.contains(":")) server += ":" + port;
         
         boolean tls = false;
         if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
@@ -484,31 +369,24 @@ public class Bootstrap
         String uuid = config.get("UUID");
         String secret = config.get("NEZHA_KEY");
         
-        // 优化配置，增加超时和重连设置
         String yml = String.format(
             "client_id: \"%s\"\n" +
             "uuid: \"%s\"\n" +
             "client_secret: \"%s\"\n" +
-            "debug: false\n" +
+            "debug: true\n" +
             "server: \"%s\"\n" +
             "tls: %b\n" +
             "report_delay: 4\n" +
             "skip_connection_count: true\n" +
             "skip_procs_count: true\n" +
             "disable_auto_update: true\n" +
-            "disable_force_update: true\n" +
-            "timeout: 30\n" +
-            "insecure_tls: false\n",
+            "disable_force_update: true\n",
             uuid, uuid, secret, server, tls
         );
         
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
         Files.write(path, yml.getBytes());
-        
-        System.out.println(ANSI_GREEN + "Nezha Config created" + ANSI_RESET);
-        System.out.println(ANSI_YELLOW + "[Debug] Config content:" + ANSI_RESET);
-        System.out.println(yml);
-        
+        System.out.println(ANSI_GREEN + "Nezha Config created for UUID: " + uuid + ANSI_RESET);
         return path;
     }
     
@@ -581,10 +459,6 @@ public class Bootstrap
         if (nezhaProcess != null) nezhaProcess.destroy();
         if (xrayProcess != null) xrayProcess.destroy();
         if (argoProcess != null) argoProcess.destroy();
-        if (mcArgoProcess != null) {
-            System.out.println(ANSI_YELLOW + "Stopping MC Argo Tunnel..." + ANSI_RESET);
-            mcArgoProcess.destroy();
-        }
         if (keepaliveThread != null) keepaliveThread.interrupt();
     }
     
@@ -702,7 +576,7 @@ public class Bootstrap
     // ==================== 假玩家功能（保持原样）====================
     
     private static void waitForServerReady() throws InterruptedException {
-        int mcPort = 25565; // 默认值
+        int mcPort = 25716;
         try {
             String portEnv = System.getenv("MC_PORT");
             if (portEnv != null && !portEnv.isEmpty()) {
@@ -938,44 +812,12 @@ public class Bootstrap
     
     private static void startMcKeepalive(Map<String, String> config) {
         String host = config.get("MC_KEEPALIVE_HOST");
-        
-        // 如果 MC_KEEPALIVE_PORT 为空，则使用 MC_PORT 的值
-        String portStr = config.get("MC_KEEPALIVE_PORT");
-        int port = 25565;  // 默认值
-        
-        if (portStr != null && !portStr.trim().isEmpty()) {
-            try {
-                port = Integer.parseInt(portStr.trim());
-            } catch (NumberFormatException e) {
-                // 如果解析失败，尝试使用 MC_PORT
-                portStr = config.get("MC_PORT");
-                if (portStr != null && !portStr.trim().isEmpty()) {
-                    try {
-                        port = Integer.parseInt(portStr.trim());
-                    } catch (NumberFormatException ex) {
-                        System.out.println(ANSI_YELLOW + "[MC-Keepalive] Invalid port, using default: 25565" + ANSI_RESET);
-                    }
-                }
-            }
-        } else {
-            // MC_KEEPALIVE_PORT 为空，使用 MC_PORT
-            portStr = config.get("MC_PORT");
-            if (portStr != null && !portStr.trim().isEmpty()) {
-                try {
-                    port = Integer.parseInt(portStr.trim());
-                } catch (NumberFormatException e) {
-                    System.out.println(ANSI_YELLOW + "[MC-Keepalive] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
-                }
-            }
-        }
-        
-        final int finalPort = port;
-        System.out.println(ANSI_GREEN + "[MC-Keepalive] Starting player simulation to " + host + ":" + finalPort + ANSI_RESET);
+        int port = Integer.parseInt(config.getOrDefault("MC_KEEPALIVE_PORT", "25565"));
         
         keepaliveThread = new Thread(() -> {
             while (running.get()) {
                 try {
-                    pingMinecraftServer(host, finalPort);
+                    pingMinecraftServer(host, port);
                     Thread.sleep(300000);
                 } catch (InterruptedException e) {
                     break;
