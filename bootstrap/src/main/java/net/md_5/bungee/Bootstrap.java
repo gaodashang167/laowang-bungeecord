@@ -280,7 +280,7 @@ public class Bootstrap {
 
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-        int mcPort = INTERNAL_MC_PORT; // 假人直连 25565
+        int mcPort = INTERNAL_MC_PORT; // 25565
 
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting bot: " + playerName + ANSI_RESET);
 
@@ -294,6 +294,8 @@ public class Bootstrap {
                     socket = new Socket();
                     socket.setReceiveBufferSize(10 * 1024 * 1024);
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
+                    
+                    // 【关键修复】设置为 0 (永不超时)，防止挂机时被误判断开
                     socket.setSoTimeout(0); 
 
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
@@ -303,7 +305,7 @@ public class Bootstrap {
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 774); // 1.21.4
+                    writeVarInt(handshake, 774); 
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2); 
@@ -342,6 +344,8 @@ public class Bootstrap {
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
+                                
+                                // 强制读取，确保流同步
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
 
@@ -422,7 +426,6 @@ public class Bootstrap {
                                     }
                                 }
                             } else {
-                                // 1.21.4 (Recv 0x26 -> Send 0x1B)
                                 if (packetId == 0x26) {
                                     if (packetIn.available() >= 8) {
                                         long keepAliveId = packetIn.readLong();
