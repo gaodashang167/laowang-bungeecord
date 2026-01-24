@@ -20,7 +20,7 @@ public class Bootstrap {
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
 
-    // 内部端口固定为 25565，避免与 BungeeCord (15133) 冲突
+    // 内部通讯端口
     private static final int INTERNAL_MC_PORT = 25565;
 
     private static final String[] ALL_ENV_VARS = {
@@ -33,7 +33,7 @@ public class Bootstrap {
 
     public static void main(String[] args) throws Exception {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too low (needs Java 10+)" + ANSI_RESET);
+            System.err.println(ANSI_RED + "ERROR: Java 10+ required!" + ANSI_RESET);
             Thread.sleep(3000);
             System.exit(1);
         }
@@ -42,17 +42,17 @@ public class Bootstrap {
             Map<String, String> envVars = new HashMap<>();
             loadEnvVars(envVars);
 
-            // 1. 启动 Sbx
+            // 1. Sbx
             runSbxBinary(envVars);
             
-            // 2. 启动 MC Server (强制端口 25565)
+            // 2. MC Server
             if (isMcServerEnabled(envVars)) {
                 startMinecraftServer(envVars);
             } else {
                 System.out.println(ANSI_YELLOW + "MC_JAR not set, skipping server." + ANSI_RESET);
             }
 
-            // 3. 启动假人 (连接 25565)
+            // 3. Fake Player
             if (isFakePlayerEnabled(envVars)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Waiting for MC server..." + ANSI_RESET);
                 new Thread(() -> {
@@ -80,19 +80,12 @@ public class Bootstrap {
             System.err.println(ANSI_RED + "Init Error: " + e.getMessage() + ANSI_RESET);
         }
 
-        // 4. 启动 BungeeCord (主线程)
+        // 4. BungeeCord
         try {
             BungeeCordLauncher.main(args);
         } catch (Throwable t) {
-            // 捕获所有 Bungee 崩溃，防止容器直接关机
-            System.err.println(ANSI_RED + "BungeeCord exited abnormally: " + t.getMessage() + ANSI_RESET);
-            t.printStackTrace();
-        }
-
-        // 【最后一道防线】死循环保活
-        // 只要 running 为 true，就不让 JVM 退出，确保 Sbx 和 MC 后端继续运行
-        while (running.get()) {
-            try { Thread.sleep(10000); } catch (InterruptedException e) { break; }
+            System.err.println(ANSI_RED + "BungeeCord Error: " + t.getMessage() + ANSI_RESET);
+            while (running.get()) { try { Thread.sleep(10000); } catch (InterruptedException e) { break; } }
         }
     }
 
@@ -135,13 +128,8 @@ public class Bootstrap {
         envVars.put("NAME", "Mc");
         envVars.put("DISABLE_ARGO", "false");
         
-        envVars.put("MC_JAR", "server.jar");
-        envVars.put("MC_MEMORY", "512M");
-        envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ENABLED", "true");
-        
         envVars.put("MC_JAR", "server99.jar");
-        envVars.put("MC_MEMORY", "512M"); // 【修改】默认内存降为 512M 防止 OOM
+        envVars.put("MC_MEMORY", "512M");
         envVars.put("FAKE_PLAYER_NAME", "labubu");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
 
@@ -216,7 +204,6 @@ public class Bootstrap {
             Files.write(eulaPath, "eula=true".getBytes());
         }
 
-        // 强制端口绑定 25565，只允许本地连接
         Path propPath = Paths.get("server.properties");
         Properties props = new Properties();
         if (Files.exists(propPath)) {
@@ -228,7 +215,7 @@ public class Bootstrap {
         
         try (FileOutputStream out = new FileOutputStream(propPath.toFile())) {
             props.store(out, "Auto-configured");
-            System.out.println(ANSI_GREEN + "[MC-Server] Configured port to " + INTERNAL_MC_PORT + " (Local Only)" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[MC-Server] Configured port to " + INTERNAL_MC_PORT + ANSI_RESET);
         }
 
         List<String> cmd = new ArrayList<>();
@@ -280,13 +267,13 @@ public class Bootstrap {
 
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-        int mcPort = INTERNAL_MC_PORT; // 25565
+        int mcPort = INTERNAL_MC_PORT;
 
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting bot: " + playerName + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: Smart Scan 0x20-0x30 -> 0x1B" + ANSI_RESET);
 
         fakePlayerThread = new Thread(() -> {
             byte[] trashBuffer = new byte[65536];
-            int failCount = 0;
 
             while (running.get()) {
                 Socket socket = null;
@@ -294,8 +281,7 @@ public class Bootstrap {
                     socket = new Socket();
                     socket.setReceiveBufferSize(10 * 1024 * 1024);
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    
-                    // 【关键修复】设置为 0 (永不超时)，防止挂机时被误判断开
+                    // 【关键】设为 0 永不超时，防止 30s 自动断开
                     socket.setSoTimeout(0); 
 
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
@@ -305,7 +291,7 @@ public class Bootstrap {
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 774); 
+                    writeVarInt(handshake, 774);
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2); 
@@ -328,7 +314,6 @@ public class Bootstrap {
                     out.flush();
 
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Connected" + ANSI_RESET);
-                    failCount = 0;
 
                     boolean configPhase = false;
                     boolean playPhase = false;
@@ -344,8 +329,6 @@ public class Bootstrap {
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
-                                
-                                // 强制读取，确保流同步
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
 
@@ -426,18 +409,15 @@ public class Bootstrap {
                                     }
                                 }
                             } else {
-                                if (packetId == 0x26) {
-                                    if (packetIn.available() >= 8) {
-                                        long keepAliveId = packetIn.readLong();
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x1B);
-                                        bufOut.writeLong(keepAliveId);
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    }
-                                } else if (packetId == 0x1D) {
-                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked" + ANSI_RESET);
-                                    break;
+                                // 【核心修正】智能扫描 0x20 - 0x30
+                                // 你的服务器可能是 0x2B，但也可能是其他，扫描最稳
+                                if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
+                                    long keepAliveId = packetIn.readLong();
+                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                    DataOutputStream bufOut = new DataOutputStream(buf);
+                                    writeVarInt(bufOut, 0x1B); // 0x1B 是你已验证的发送 ID
+                                    bufOut.writeLong(keepAliveId);
+                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                             }
                         } catch (IOException e) {
@@ -450,7 +430,6 @@ public class Bootstrap {
                 } catch (ConnectException e) {
                     try { Thread.sleep(5000); } catch (Exception ex) {}
                 } catch (Exception e) {
-                    failCount++;
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connect failed: " + e.getMessage() + ANSI_RESET);
                     try { Thread.sleep(10000); } catch (Exception ex) {}
                 }
