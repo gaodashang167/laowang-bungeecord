@@ -667,59 +667,43 @@ public class Bootstrap
     
     private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
         try {
-            int actionType = (int)(Math.random() * 5);
+            int actionType = (int)(Math.random() * 3);  // 只用 3 种安全的动作
             
             switch(actionType) {
-                case 0:
+                case 0: // 转头 - 最安全
                     ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                     DataOutputStream rot = new DataOutputStream(rotBuf);
-                    writeVarInt(rot, 0x1F);
-                    rot.writeFloat((float)(Math.random() * 360));
-                    rot.writeFloat((float)(Math.random() * 180 - 90));
-                    rot.writeBoolean(true);
+                    writeVarInt(rot, 0x1F);  // Set Rotation
+                    rot.writeFloat((float)(Math.random() * 360));  // Yaw
+                    rot.writeFloat((float)(Math.random() * 180 - 90));  // Pitch
+                    rot.writeBoolean(true);  // On ground
                     sendPacket(out, rotBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
                     break;
                     
-                case 1:
+                case 1: // 挥手 - 安全
                     ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                     DataOutputStream swing = new DataOutputStream(swingBuf);
-                    writeVarInt(swing, 0x36);
-                    writeVarInt(swing, 0);
+                    writeVarInt(swing, 0x36);  // Swing Arm
+                    writeVarInt(swing, 0);  // Main hand
                     sendPacket(out, swingBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
                     break;
                     
-                case 2:
-                    ByteArrayOutputStream heldBuf = new ByteArrayOutputStream();
-                    DataOutputStream held = new DataOutputStream(heldBuf);
-                    writeVarInt(held, 0x2E);
-                    held.writeShort((int)(Math.random() * 9));
-                    sendPacket(out, heldBuf.toByteArray(), compress, threshold);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] → Changed hotbar slot" + ANSI_RESET);
-                    break;
-                    
-                case 3:
+                case 2: // 蹲下/站起 - 安全
                     ByteArrayOutputStream sneakBuf = new ByteArrayOutputStream();
                     DataOutputStream sneak = new DataOutputStream(sneakBuf);
-                    writeVarInt(sneak, 0x22);
-                    writeVarInt(sneak, 0);
-                    writeVarInt(sneak, Math.random() < 0.5 ? 0 : 1);
-                    writeVarInt(sneak, 0);
+                    writeVarInt(sneak, 0x22);  // Player Command
+                    writeVarInt(sneak, 0);  // Entity ID
+                    writeVarInt(sneak, Math.random() < 0.5 ? 0 : 1);  // Start/Stop sneaking
+                    writeVarInt(sneak, 0);  // Jump boost
                     sendPacket(out, sneakBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Sneak toggle" + ANSI_RESET);
                     break;
-                    
-                case 4:
-                    ByteArrayOutputStream invBuf = new ByteArrayOutputStream();
-                    DataOutputStream inv = new DataOutputStream(invBuf);
-                    writeVarInt(inv, 0x0F);
-                    inv.writeByte(0);
-                    sendPacket(out, invBuf.toByteArray(), compress, threshold);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] → Inventory action" + ANSI_RESET);
-                    break;
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            // 忽略错误
+        }
     }
     
     private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
