@@ -154,7 +154,7 @@ public class Bootstrap
         
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "high");
+        envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // "low", "medium", "high", "ultra"
         
         // Override with system environment variables
         for (String var : ALL_ENV_VARS) {
