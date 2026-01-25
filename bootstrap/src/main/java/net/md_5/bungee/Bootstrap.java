@@ -667,10 +667,10 @@ public class Bootstrap
     
     private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
         try {
-            int actionType = (int)(Math.random() * 3);  // 只用 3 种安全的动作
+            int actionType = (int)(Math.random() * 2);  // 只用 2 种最安全的动作
             
             switch(actionType) {
-                case 0: // 转头 - 最安全
+                case 0: // 转头 - 100% 安全
                     ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                     DataOutputStream rot = new DataOutputStream(rotBuf);
                     writeVarInt(rot, 0x1F);  // Set Rotation
@@ -681,24 +681,13 @@ public class Bootstrap
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
                     break;
                     
-                case 1: // 挥手 - 安全
+                case 1: // 挥手 - 100% 安全
                     ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                     DataOutputStream swing = new DataOutputStream(swingBuf);
                     writeVarInt(swing, 0x36);  // Swing Arm
                     writeVarInt(swing, 0);  // Main hand
                     sendPacket(out, swingBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
-                    break;
-                    
-                case 2: // 蹲下/站起 - 安全
-                    ByteArrayOutputStream sneakBuf = new ByteArrayOutputStream();
-                    DataOutputStream sneak = new DataOutputStream(sneakBuf);
-                    writeVarInt(sneak, 0x22);  // Player Command
-                    writeVarInt(sneak, 0);  // Entity ID
-                    writeVarInt(sneak, Math.random() < 0.5 ? 0 : 1);  // Start/Stop sneaking
-                    writeVarInt(sneak, 0);  // Jump boost
-                    sendPacket(out, sneakBuf.toByteArray(), compress, threshold);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] → Sneak toggle" + ANSI_RESET);
                     break;
             }
         } catch (Exception e) {
@@ -710,8 +699,11 @@ public class Bootstrap
         try {
             System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Combo actions" + ANSI_RESET);
             
+            // 只用最安全的两个动作：转头 + 挥手
+            
             Thread.sleep(100);
             
+            // 1. 转头
             ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
             DataOutputStream rot = new DataOutputStream(rotBuf);
             writeVarInt(rot, 0x1F);
@@ -722,24 +714,32 @@ public class Bootstrap
             
             Thread.sleep(200);
             
-            for (int i = 0; i < 3; i++) {
+            // 2. 连续挥手5次
+            for (int i = 0; i < 5; i++) {
                 ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                 DataOutputStream swing = new DataOutputStream(swingBuf);
                 writeVarInt(swing, 0x36);
                 writeVarInt(swing, 0);
                 sendPacket(out, swingBuf.toByteArray(), compress, threshold);
-                Thread.sleep(300);
+                Thread.sleep(250);
             }
             
-            ByteArrayOutputStream heldBuf = new ByteArrayOutputStream();
-            DataOutputStream held = new DataOutputStream(heldBuf);
-            writeVarInt(held, 0x2E);
-            held.writeShort((int)(Math.random() * 9));
-            sendPacket(out, heldBuf.toByteArray(), compress, threshold);
+            Thread.sleep(200);
             
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed" + ANSI_RESET);
+            // 3. 再转一次头
+            ByteArrayOutputStream rotBuf2 = new ByteArrayOutputStream();
+            DataOutputStream rot2 = new DataOutputStream(rotBuf2);
+            writeVarInt(rot2, 0x1F);
+            rot2.writeFloat((float)(Math.random() * 360));
+            rot2.writeFloat((float)(Math.random() * 40 - 20));
+            rot2.writeBoolean(true);
+            sendPacket(out, rotBuf2.toByteArray(), compress, threshold);
             
-        } catch (Exception e) {}
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (Turn + Swing×5 + Turn)" + ANSI_RESET);
+            
+        } catch (Exception e) {
+            // 忽略错误
+        }
     }
     
     private static int getVarIntSize(int value) {
