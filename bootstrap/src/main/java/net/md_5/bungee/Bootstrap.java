@@ -61,7 +61,7 @@ public class Bootstrap
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
-                Thread.sleep(30000);  
+                Thread.sleep(35000);  
             }
             
             if (isFakePlayerEnabled(config)) {
@@ -131,6 +131,7 @@ public class Bootstrap
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "25897");
+        
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "low");
@@ -216,10 +217,7 @@ public class Bootstrap
             return;
         }
         
-        Path eulaPath = Paths.get("eula.txt");
-        if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
-        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
-        
+        // 强制覆盖 server.properties，确保 player-idle-timeout=0
         Path propPath = Paths.get("server.properties");
         String props = Files.exists(propPath) ? new String(Files.readAllBytes(propPath)) : "server-port=" + mcPort + "\nonline-mode=false\n";
         props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
@@ -229,6 +227,11 @@ public class Bootstrap
         if (props.contains("online-mode=true")) props = props.replace("online-mode=true", "online-mode=false");
         else if (!props.contains("online-mode=")) props += "online-mode=false\n";
         Files.write(propPath, props.getBytes());
+        
+        // EULA
+        Path eulaPath = Paths.get("eula.txt");
+        if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
+        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
         
         System.out.println(ANSI_GREEN + "\n=== Starting Minecraft Server ===" + ANSI_RESET);
         
@@ -299,9 +302,6 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         
         fakePlayerThread = new Thread(() -> {
-            long lastActionTime = System.currentTimeMillis();
-            long nextActionInterval = 3000;
-            
             while (running.get()) {
                 Socket socket = null;
                 try {
@@ -388,21 +388,15 @@ public class Bootstrap
                                     }
                                 }
                             } else { // Play
-                                if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) { 
+                                // ==========================================
+                                // 核心逻辑：只回复心跳，不主动做任何动作
+                                // ==========================================
+                                // 宽松匹配 ID (0x1F - 0x28) 覆盖大部分版本的心跳包
+                                if (packetId >= 0x1F && packetId <= 0x28 && packetIn.available() == 8) { 
                                     long keepAliveId = packetIn.readLong();
                                     // 1.21.2+ Serverbound KeepAlive ID = 0x18
                                     sendKeepAlive(out, deflater, keepAliveId, 0x18, compressionEnabled, compressionThreshold);
                                     System.out.println(ANSI_GREEN + "[FakePlayer] Ping" + ANSI_RESET);
-                                }
-                                
-                                // ========================================================
-                                // [NEW] 随机动作: 发送玩家位置 (Player Position) 
-                                // ID 0x1A (1.21.2) - 伪装成微小移动
-                                // ========================================================
-                                if (System.currentTimeMillis() - lastActionTime > nextActionInterval) {
-                                    sendPlayerPosition(out, deflater, compressionEnabled, compressionThreshold);
-                                    lastActionTime = System.currentTimeMillis();
-                                    nextActionInterval = 2000 + (long)(Math.random() * 3000); 
                                 }
                             }
                         } catch (Exception e) { break; }
@@ -419,30 +413,6 @@ public class Bootstrap
         fakePlayerThread.start();
     }
     
-    // [NEW] 发送玩家位置包 (0x1A - Player Position)
-    // 这是最安全的保活方式，因为所有版本都有位置包
-    private static void sendPlayerPosition(DataOutputStream out, Deflater deflater, boolean compress, int threshold) {
-        try {
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            DataOutputStream bufOut = new DataOutputStream(buf);
-            
-            // 1.21.2+ ID 0x1A (Player Position)
-            // 如果还报错，说明 ID 还是不对，但这比 Swing Arm 安全得多
-            writeVarInt(bufOut, 0x1A); 
-            
-            // X (Double)
-            bufOut.writeDouble(0.0);
-            // Y (Double) - 稍微动一下防止判定为挂机? 其实发 0 也没事，只要有包就行
-            bufOut.writeDouble(100.0); 
-            // Z (Double)
-            bufOut.writeDouble(0.0);
-            // OnGround (Boolean)
-            bufOut.writeBoolean(true); 
-            
-            sendPacket(out, deflater, buf.toByteArray(), compress, threshold);
-        } catch (IOException ignored) {}
-    }
-
     private static synchronized void sendPacketRaw(DataOutputStream out, Deflater deflater, byte[] data, int len, boolean compress, int threshold) throws IOException {
         if (!compress || len < threshold) {
             if (compress) {
