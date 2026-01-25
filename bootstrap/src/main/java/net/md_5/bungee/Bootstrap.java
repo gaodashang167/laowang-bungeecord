@@ -328,7 +328,6 @@ public class Bootstrap
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
                     
-                    // [FIX] Add BufferedOutputStream to prevent fragmentation and decoding errors
                     DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
@@ -336,7 +335,7 @@ public class Bootstrap
                     sendHandshake(out, mcPort);
                     // Login
                     sendLogin(out, playerName);
-                    out.flush(); // Ensure sent
+                    out.flush(); 
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
                     
@@ -420,10 +419,7 @@ public class Bootstrap
                                     } else if (packetId == 0x02) { 
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                         sendAck(out, deflater, compressionEnabled, compressionThreshold);
-                                        
-                                        // [FIX] Wait slightly to let server change state
                                         Thread.sleep(50);
-                                        
                                         configPhase = true;
                                         sendClientSettings(out, deflater, compressionEnabled, compressionThreshold);
                                     }
@@ -540,9 +536,13 @@ public class Bootstrap
         writeVarInt(bufOut, 1); 
         bufOut.writeBoolean(false); 
         bufOut.writeBoolean(true);
-        byte[] b = buf.toByteArray();
         
-        // [FIX] Using System.arraycopy with synchronized SEND_BUFFER safely due to single thread logic
+        // ==========================================
+        // [FIX] Add Particle Status (VarInt) for 1.21.2+
+        // ==========================================
+        writeVarInt(bufOut, 0); // Particle Status: 0 (All)
+
+        byte[] b = buf.toByteArray();
         System.arraycopy(b, 0, SEND_BUFFER, 0, b.length);
         sendPacketRaw(out, deflater, SEND_BUFFER, b.length, compress, threshold);
     }
