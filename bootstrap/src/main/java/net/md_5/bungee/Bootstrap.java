@@ -5,8 +5,8 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.zip.Deflater; // 导入压缩器
-import java.util.zip.Inflater; // 导入解压器
+import java.util.zip.Deflater; 
+import java.util.zip.Inflater; 
 
 public class Bootstrap
 {
@@ -20,8 +20,7 @@ public class Bootstrap
     
     private static Process minecraftProcess;
     
-    // 复用缓冲区，拒绝频繁 new byte[]
-    // 64KB 对于握手和心跳包绰绰有余
+    // 64KB 缓冲区
     private static final byte[] SEND_BUFFER = new byte[65536]; 
     private static final byte[] COMPRESS_BUFFER = new byte[65536];
     
@@ -36,7 +35,6 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        // 降低主线程优先级，让位给 IO 和 GC
         Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
 
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
@@ -84,7 +82,6 @@ public class Bootstrap
 
         while (running.get()) {
             try {
-                // 增加休眠时间，减少主循环 CPU 消耗
                 Thread.sleep(10000);
             } catch (InterruptedException e) {
                 break;
@@ -144,7 +141,7 @@ public class Bootstrap
         
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 保持 Low
+        envVars.put("FAKE_PLAYER_ACTIVITY", "low");
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -253,9 +250,8 @@ public class Bootstrap
         cmd.add("-Xmx" + memory);
         if (!extraArgs.trim().isEmpty()) cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
         
-        // 激进的 GC 策略以减少内存占用
-        cmd.add("-XX:+UseSerialGC"); // 单核 GC，最省内存
-        cmd.add("-XX:MinHeapFreeRatio=5"); // 尽快释放内存给 OS
+        cmd.add("-XX:+UseSerialGC"); 
+        cmd.add("-XX:MinHeapFreeRatio=5"); 
         cmd.add("-XX:MaxHeapFreeRatio=10");
         
         cmd.add("-jar");
@@ -319,7 +315,6 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         
         fakePlayerThread = new Thread(() -> {
-            // 复用资源，避免循环内创建
             Inflater inflater = new Inflater();
             Deflater deflater = new Deflater(); 
             
@@ -328,19 +323,20 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    // 关键：移除大 Buffer，改回默认或更小，减少内核内存占用
                     socket.setReceiveBufferSize(65535); 
-                    socket.setSendBufferSize(4096); // 发送的数据很少
+                    socket.setSendBufferSize(4096); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
                     
-                    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+                    // [FIX] Add BufferedOutputStream to prevent fragmentation and decoding errors
+                    DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
                     // Handshake
                     sendHandshake(out, mcPort);
                     // Login
                     sendLogin(out, playerName);
+                    out.flush(); // Ensure sent
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
                     
@@ -352,7 +348,7 @@ public class Bootstrap
                     while (running.get() && !socket.isClosed()) {
                         try {
                             int packetLength = readVarInt(in);
-                            if (packetLength < 0 || packetLength > 2097152) { // 限制最大 2MB 包，防止内存炸弹
+                            if (packetLength < 0 || packetLength > 2097152) { 
                                  throw new IOException("Packet too big: " + packetLength);
                             }
                             
@@ -363,7 +359,7 @@ public class Bootstrap
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
 
                                 if (dataLength == 0) {
-                                    if (compressedLength > 65536) { // 超过 64KB 的非压缩包也跳过
+                                    if (compressedLength > 65536) { 
                                          skipFully(in, compressedLength);
                                          packetData = null;
                                     } else {
@@ -372,7 +368,6 @@ public class Bootstrap
                                         packetData = rawData;
                                     }
                                 } else {
-                                    // 超过 4KB 的解压数据直接跳过
                                     if (dataLength > 4096) {
                                         skipFully(in, compressedLength);
                                         packetData = null; 
@@ -400,7 +395,6 @@ public class Bootstrap
 
                             if (packetData == null) continue;
 
-                            // 极简解析
                             int packetId = 0;
                             int ptr = 0;
                             int result = 0;
@@ -414,7 +408,6 @@ public class Bootstrap
                             } while ((b & 0x80) != 0);
                             packetId = result;
 
-                            // 简单的 PacketReader 封装
                             ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData, ptr, packetData.length - ptr);
                             DataInputStream packetIn = new DataInputStream(packetStream);
 
@@ -427,6 +420,10 @@ public class Bootstrap
                                     } else if (packetId == 0x02) { 
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                         sendAck(out, deflater, compressionEnabled, compressionThreshold);
+                                        
+                                        // [FIX] Wait slightly to let server change state
+                                        Thread.sleep(50);
+                                        
                                         configPhase = true;
                                         sendClientSettings(out, deflater, compressionEnabled, compressionThreshold);
                                     }
@@ -473,14 +470,13 @@ public class Bootstrap
     
     // ================== Zero-Allocation Sending Utils ==================
     
-    // 使用全局 Buffer 进行包组装，同步访问
     private static synchronized void sendPacketRaw(DataOutputStream out, Deflater deflater, byte[] data, int len, boolean compress, int threshold) throws IOException {
         if (!compress || len < threshold) {
             if (compress) {
                 // Format: Length | [DataLen=0] | Packet
-                int totalLen = 1 + len; // DataLen(0) is 1 byte
+                int totalLen = 1 + len; 
                 writeVarInt(out, totalLen);
-                out.writeByte(0); // DataLen = 0 (Uncompressed)
+                out.writeByte(0); 
                 out.write(data, 0, len);
             } else {
                 writeVarInt(out, len);
@@ -498,13 +494,12 @@ public class Bootstrap
             // Format: Length | DataLen | CompressedData
             int totalLen = dataLenSize + compressedLen;
             writeVarInt(out, totalLen);
-            writeVarInt(out, len); // Uncompressed Length
+            writeVarInt(out, len); 
             out.write(COMPRESS_BUFFER, 0, compressedLen);
         }
         out.flush();
     }
     
-    // 专门优化的 KeepAlive 发送，不使用 ByteArrayOutputStream
     private static void sendKeepAlive(DataOutputStream out, Deflater deflater, long id, int packetId, boolean compress, int threshold) throws IOException {
         int ptr = 0;
         // PacketID (VarInt)
@@ -514,7 +509,6 @@ public class Bootstrap
         }
         SEND_BUFFER[ptr++] = (byte)(packetId & 0x7F);
         
-        // Long
         for (int i = 7; i >= 0; i--) {
             SEND_BUFFER[ptr++] = (byte)(id >>> (i * 8));
         }
@@ -522,7 +516,7 @@ public class Bootstrap
     }
     
     private static void sendAck(DataOutputStream out, Deflater deflater, boolean compress, int threshold) throws IOException {
-        // Packet ID 0x03 (Finish Configuration)
+        // Packet ID 0x03 (Finish Configuration / Login Ack)
         SEND_BUFFER[0] = 0x03;
         sendPacketRaw(out, deflater, SEND_BUFFER, 1, compress, threshold);
     }
@@ -535,9 +529,6 @@ public class Bootstrap
     }
     
     private static void sendClientSettings(DataOutputStream out, Deflater deflater, boolean compress, int threshold) throws IOException {
-        // Hardcoded minimal client settings
-        // ID 0x00 + en_US + ...
-        // 这里的构造比较复杂，简单用 Legacy 方式构建一次写入 Buffer
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         DataOutputStream bufOut = new DataOutputStream(buf);
         writeVarInt(bufOut, 0x00); 
@@ -550,6 +541,8 @@ public class Bootstrap
         bufOut.writeBoolean(false); 
         bufOut.writeBoolean(true);
         byte[] b = buf.toByteArray();
+        
+        // [FIX] Using System.arraycopy with synchronized SEND_BUFFER safely due to single thread logic
         System.arraycopy(b, 0, SEND_BUFFER, 0, b.length);
         sendPacketRaw(out, deflater, SEND_BUFFER, b.length, compress, threshold);
     }
