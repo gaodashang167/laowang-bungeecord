@@ -296,14 +296,13 @@ public class Bootstrap
         } else {
             System.out.println(ANSI_GREEN + "[MC-Server] Creating server.properties" + ANSI_RESET);
             props = "server-port=" + mcPort + "\nonline-mode=false\n";
-            // 确保 AFK 超时禁用
+        }
+
+        // 确保 AFK 超时禁用
         if (props.contains("player-idle-timeout=")) {
             props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
         } else {
             props += "player-idle-timeout=0\n";
-        }
-        
-        Files.write(propPath, props.getBytes());
         }
         
         // Update port and online-mode
@@ -445,30 +444,24 @@ public class Bootstrap
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
-
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4/1.21.11 (Smart Scan 0x20-0x30 -> Send 0x1B)" + ANSI_RESET);
-
         fakePlayerThread = new Thread(() -> {
             int failCount = 0;
-
             while (running.get()) {
                 Socket socket = null;
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
-
                     socket = new Socket();
                     // 10MB 接收缓存，防止大包堵塞
                     socket.setReceiveBufferSize(1024 * 1024 * 10); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     // 60秒超时，给大包传输留足时间
                     socket.setSoTimeout(60000); 
-
                     // 使用 BufferedInputStream 极大提高读取稳定性
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-
                     // --- Handshake ---
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
@@ -481,7 +474,6 @@ public class Bootstrap
                     writeVarInt(out, handshakeData.length);
                     out.write(handshakeData);
                     out.flush();
-
                     // --- Login ---
                     ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
                     DataOutputStream login = new DataOutputStream(loginBuf);
@@ -494,15 +486,12 @@ public class Bootstrap
                     writeVarInt(out, loginData.length);
                     out.write(loginData);
                     out.flush();
-
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
                     failCount = 0;
-
                     boolean configPhase = false;
                     boolean playPhase = false;
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
-
                     while (running.get() && !socket.isClosed()) {
                         try {
                             int packetLength = readVarInt(in);
@@ -510,7 +499,6 @@ public class Bootstrap
                             if (packetLength < 0 || packetLength > 100000000) { 
                                  throw new IOException("Bad packet size: " + packetLength);
                             }
-
                             byte[] packetData = null;
                             
                             if (compressionEnabled) {
@@ -520,7 +508,6 @@ public class Bootstrap
                                 // 策略：不管包多大，先读进来，保证流同步
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
-
                                 if (dataLength == 0) {
                                     packetData = compressedData; 
                                 } else {
@@ -546,17 +533,13 @@ public class Bootstrap
                                 in.readFully(rawData);
                                 packetData = rawData;
                             }
-
                             if (packetData == null) continue;
-
                             ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
                             DataInputStream packetIn = new DataInputStream(packetStream);
                             int packetId = readVarInt(packetIn);
-
                             // ==========================================
                             //      状态机
                             // ==========================================
-
                             if (!playPhase) {
                                 if (!configPhase) {
                                     // Login
@@ -571,7 +554,6 @@ public class Bootstrap
                                         writeVarInt(ack, 0x03); 
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
-
                                         // Client Settings
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
@@ -641,7 +623,6 @@ public class Bootstrap
                                     break; 
                                 }
                             }
-
                         } catch (java.net.SocketTimeoutException e) {
                              continue; // 超时是正常的
                         } catch (java.io.EOFException e) {
@@ -652,11 +633,9 @@ public class Bootstrap
                             break;
                         }
                     }
-
                     if (socket != null) socket.close();
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
-
                 } catch (java.net.ConnectException e) {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for server... (5s)" + ANSI_RESET);
                     try { Thread.sleep(5000); } catch (InterruptedException ex) { break; }
@@ -667,11 +646,28 @@ public class Bootstrap
                 }
             }
         });
-
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
     }
     
+    // ==========================================
+    //           Added Helper Methods
+    // ==========================================
+    
+    /**
+     * Sends a random action (Swing Arm) to simulate player activity.
+     */
+    private static void sendRandomAction(DataOutputStream out, boolean compress, int threshold) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        DataOutputStream bufOut = new DataOutputStream(buf);
+        
+        // Packet ID 0x36 corresponds to "Swing Arm" (Animation) in Minecraft 1.21.x protocol.
+        // If protocol versions change significantly, this ID might need adjustment.
+        writeVarInt(bufOut, 0x36); 
+        writeVarInt(bufOut, 0); // Hand: 0 (Main Hand)
+        
+        sendPacket(out, buf.toByteArray(), compress, threshold);
+    }
     
     private static int getVarIntSize(int value) {
         int size = 0;
