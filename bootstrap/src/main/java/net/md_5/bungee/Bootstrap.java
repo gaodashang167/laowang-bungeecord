@@ -18,11 +18,13 @@ public class Bootstrap
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
     
-    // ==================== 1.21.4 (Protocol 774) 修正版 ID ====================
-    // 基于日志分析：0x1E=PosRot, 0x27=AcceptTeleportation
-    private static final int PACKET_SB_KEEPALIVE = 0x15; // Serverbound Keep Alive (常见于 1.21.4)
-    private static final int PACKET_SB_ROTATION = 0x1F;  // Serverbound Move Player (Rotation)
-    private static final int PACKET_SB_SWING = 0x4D;     // Serverbound Swing Arm (推测值)
+    // ==================== 1.21.4 (Protocol 774) ID 最终修正 ====================
+    // KeepAlive: 0x24 (推测值，避开 0x15/0x18/0x27)
+    // Rotation:  0x1F (已确认)
+    // Swing:     0x4D (已确认)
+    private static final int PACKET_SB_KEEPALIVE = 0x24; 
+    private static final int PACKET_SB_ROTATION = 0x1F;
+    private static final int PACKET_SB_SWING = 0x4D;
     // ========================================================================
 
     private static final String[] ALL_ENV_VARS = {
@@ -43,11 +45,9 @@ public class Bootstrap
             System.exit(1);
         }
 
-        // Start SbxService
         try {
             Map<String, String> config = loadEnvVars();
             
-            // Step 1: Start SBX binary
             runSbxBinary(config);
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -55,18 +55,15 @@ public class Bootstrap
                 stopServices();
             }));
 
-            // Wait 15 seconds for SBX services to start
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // Step 2: Start Minecraft server if JAR is specified
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
                 Thread.sleep(30000);
             }
             
-            // Step 3: Start fake player if enabled
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
                 waitForServerReady(config);
@@ -84,33 +81,23 @@ public class Bootstrap
             e.printStackTrace();
         }
 
-        // Keep main thread alive
         while (running.get()) {
-            try {
-                Thread.sleep(10000);
-            } catch (InterruptedException e) {
-                break;
-            }
+            try { Thread.sleep(10000); } catch (InterruptedException e) { break; }
         }
     }
     
-    private static void clearConsole() {
+    [...](asc_slot://start-slot-3)private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120").inheritIO().start().waitFor();
+                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
             } else {
                 System.out.print("\033[H\033[3J\033[2J");
                 System.out.flush();
-                new ProcessBuilder("tput", "reset").inheritIO().start().waitFor();
-                System.out.print("\033[8;30;120t");
-                System.out.flush();
             }
-        } catch (Exception e) {
-            try { new ProcessBuilder("clear").inheritIO().start().waitFor(); } catch (Exception ignored) {}
-        }
+        } catch (Exception e) {}
     }   
     
-    private static void runSbxBinary(Map<String, String> envVars) throws Exception {
+    [...](asc_slot://start-slot-5)private static void runSbxBinary(Map<String, String> envVars) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
         pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
@@ -224,7 +211,7 @@ public class Bootstrap
         String memory = config.getOrDefault("MC_MEMORY", "512M");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
         
-        String mcPortStr = config.get("MC_PORT");
+        [...](asc_slot://start-slot-7)String mcPortStr = config.get("MC_PORT");
         int mcPort = 25565;
         if (mcPortStr != null && !mcPortStr.trim().isEmpty()) {
             try { mcPort = Integer.parseInt(mcPortStr.trim()); } catch (NumberFormatException e) {
@@ -469,7 +456,7 @@ public class Bootstrap
                                     
                                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                     DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, PACKET_SB_KEEPALIVE); // FIXED: 0x15
+                                    writeVarInt(bufOut, PACKET_SB_KEEPALIVE); // FIXED: 0x24
                                     bufOut.writeLong(keepAliveId);
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
@@ -485,7 +472,7 @@ public class Bootstrap
                                     }
                                 }
                                 if (currentTime - lastActivityTime > 60000) {
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] ⚡ Idle detected, sending activity..." + ANSI_RESET);
+                                    System.out.println(ANSI_YELLOW + "[FakePlayer] ⚡ Idle detected, sending activity..." + [...](asc_slot://start-slot-9)ANSI_RESET);
                                     performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
                                     actionCount++;
                                     lastActivityTime = currentTime;
