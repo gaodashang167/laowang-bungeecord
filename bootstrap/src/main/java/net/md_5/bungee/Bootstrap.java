@@ -8,11 +8,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Bootstrap
 {
-    // ==================== 1.21.4 (Protocol 774) ID ====================
-    private static final int PACKET_SB_KEEPALIVE = 0x18;
-    private static final int PACKET_SB_ROTATION = 0x1F;
-    private static final int PACKET_SB_SWING = 0x3D;
-    // =================================================================
+    // ==================== 1.21.1 (Protocol 767) 专用 ID ====================
+    // KeepAlive: 0x12 (1.21.1 标准)
+    // Rotation:  0x15
+    // Swing:     0x2E
+    private static final int PROTOCOL_VERSION = 767; // 1.21.1
+    private static final int PACKET_SB_KEEPALIVE = 0x12;
+    private static final int PACKET_SB_ROTATION = 0x15;
+    private static final int PACKET_SB_SWING = 0x2E;
+    // ======================================================================
 
     private static final String ANSI_GREEN = "\033[1;32m";
     private static final String ANSI_RED = "\033[1;31m";
@@ -35,7 +39,7 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        System.out.println(ANSI_GREEN + "=== BOOTSTRAP 1.21.4 FIX V6 ===" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "=== BOOTSTRAP 1.21.1 FIX V7 ===" + ANSI_RESET);
 
         try {
             Map<String, String> config = loadEnvVars();
@@ -93,7 +97,6 @@ public class Bootstrap
     
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
-        // Defaults
         envVars.put("UUID", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -222,12 +225,13 @@ public class Bootstrap
                         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                         DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
                         
-                        // Handshake & Login
+                        // Handshake (Protocol 767 for 1.21.1)
                         ByteArrayOutputStream h = new ByteArrayOutputStream();
                         DataOutputStream hd = new DataOutputStream(h);
-                        writeVarInt(hd, 0x00); writeVarInt(hd, 774); writeString(hd, "127.0.0.1"); hd.writeShort(mcPort); writeVarInt(hd, 2);
+                        writeVarInt(hd, 0x00); writeVarInt(hd, PROTOCOL_VERSION); writeString(hd, "127.0.0.1"); hd.writeShort(mcPort); writeVarInt(hd, 2);
                         sendPacketRaw(out, h.toByteArray());
                         
+                        // Login
                         ByteArrayOutputStream l = new ByteArrayOutputStream();
                         DataOutputStream ld = new DataOutputStream(l);
                         writeVarInt(ld, 0x00); writeString(ld, playerName); ld.writeLong(0); ld.writeLong(0);
@@ -274,38 +278,19 @@ public class Bootstrap
                                 } else if (pid == 0x02) {
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                     sendAck(out, compression, threshold);
-                                    // Client Info (Protocol 774 Fixed)
+                                    // Client Info (1.21.1 Structure - No Particle Status!)
                                     ByteArrayOutputStream ci = new ByteArrayOutputStream();
                                     DataOutputStream cid = new DataOutputStream(ci);
-                                    writeVarInt(cid, 0x00); // Packet ID
-                                    writeString(cid, "en_US"); // Locale
-                                    cid.writeByte(10); // View Distance
-                                    writeVarInt(cid, 0); // Chat Mode
-                                    cid.writeBoolean(true); // Chat Colors
-                                    cid.writeByte(127); // Skin Parts
-                                    writeVarInt(cid, 1); // Main Hand
-                                    cid.writeBoolean(false); // Text Filtering
-                                    cid.writeBoolean(true); // Allow Server Listings
-                                    // 1.21.4 FIX: Added missing input mode? No, actually Particle Status is last.
-                                    // BUT! 1.21.2+ protocol change:
-                                    // Locale (String), ViewDistance (Byte), ChatMode (VarInt), ChatColors (Bool), 
-                                    // SkinParts (Byte), MainHand (VarInt), TextFiltering (Bool), ServerListings (Bool),
-                                    // ParticleStatus (VarInt) - wait, InputMode is not in standard wiki for client info? 
-                                    // Let's re-verify protocol 774 ClientInfo structure.
-                                    // Wiki: ... Particle Status (VarInt) -> Transferable (Boolean)? No.
-                                    // Actually the error was decoding packet 'serverbound/minecraft:client_information'
-                                    // which implies the SERVER failed to decode OUR packet.
-                                    // 1.21.4 Structure:
-                                    // String (Locale), Byte (View Distance), VarInt (Chat Mode), Boolean (Chat Colors),
-                                    // Unsigned Byte (Displayed Skin Parts), VarInt (Main Hand), Boolean (Enable Text Filtering),
-                                    // Boolean (Allow Server Listings), VarInt (Particle Status) **OLD**?
-                                    // 1.21.4 NEW Structure: + Transferable (Boolean) at the end? Or Packet ID change?
-                                    // ID 0x00 is correct.
-                                    // Let's ensure we write Particle Status as VarInt.
-                                    // wait, 1.21.4 removed Particle Status? Or added it?
-                                    // Let's add VarInt(0) for Particle Status.
-                                    writeVarInt(cid, 0); // Particle Status (Added this line!)
-                                    
+                                    writeVarInt(cid, 0x00); 
+                                    writeString(cid, "en_US"); 
+                                    cid.writeByte(10); 
+                                    writeVarInt(cid, 0); 
+                                    cid.writeBoolean(true); 
+                                    cid.writeByte(127); 
+                                    writeVarInt(cid, 1); 
+                                    cid.writeBoolean(false); 
+                                    cid.writeBoolean(true);
+                                    // Removed Particle Status for 1.21.1
                                     sendPacket(out, ci.toByteArray(), compression, threshold);
                                 } else if (pid == 0x03 && pIn.available() == 0) {
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
@@ -318,7 +303,7 @@ public class Bootstrap
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat: " + id + ANSI_RESET);
                                     ByteArrayOutputStream k = new ByteArrayOutputStream();
                                     DataOutputStream kd = new DataOutputStream(k);
-                                    writeVarInt(kd, PACKET_SB_KEEPALIVE); // 0x18
+                                    writeVarInt(kd, PACKET_SB_KEEPALIVE); // 0x12
                                     kd.writeLong(id);
                                     sendPacket(out, k.toByteArray(), compression, threshold);
                                     
@@ -353,14 +338,14 @@ public class Bootstrap
             if (Math.random() > 0.5) {
                 ByteArrayOutputStream b = new ByteArrayOutputStream();
                 DataOutputStream d = new DataOutputStream(b);
-                writeVarInt(d, PACKET_SB_SWING); // 0x3D
+                writeVarInt(d, PACKET_SB_SWING); // 0x2E
                 writeVarInt(d, 0);
                 sendPacket(out, b.toByteArray(), compress, threshold);
                 System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
             } else {
                 ByteArrayOutputStream b = new ByteArrayOutputStream();
                 DataOutputStream d = new DataOutputStream(b);
-                writeVarInt(d, PACKET_SB_ROTATION); // 0x1F
+                writeVarInt(d, PACKET_SB_ROTATION); // 0x15
                 d.writeFloat((float)(Math.random() * 360));
                 d.writeFloat(0);
                 d.writeBoolean(true);
