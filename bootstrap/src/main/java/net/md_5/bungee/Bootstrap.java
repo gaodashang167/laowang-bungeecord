@@ -57,14 +57,18 @@ public class Bootstrap
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
-                Thread.sleep(30000);  // Wait for MC server to initialize
+                // 这里等待时间可以适当，后续 fake player 会轮询端口
+                Thread.sleep(30000);  
             }
             
             // Step 3: Start fake player if enabled
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
+                // 这里会循环检测端口，直到服务器就绪
                 waitForServerReady(config);
                 startFakePlayerBot(config);
+            } else {
+                System.out.println(ANSI_YELLOW + "\n[FakePlayer] Skipped (Disabled in config)" + ANSI_RESET);
             }
             
             System.out.println(ANSI_GREEN + "\nThank you for using this script, Enjoy!\n" + ANSI_RESET);
@@ -152,7 +156,12 @@ public class Bootstrap
         envVars.put("MC_MEMORY", "512M");  // Memory allocation
         envVars.put("MC_ARGS", "");  // Extra JVM arguments
         envVars.put("MC_PORT", "25897");  // Empty = use 25565
-        envVars.put("FAKE_PLAYER_ENABLED", "false");  // Set to "true" to enable
+        
+        // ============================================================
+        // [FIX] Enable Fake Player by default
+        // ============================================================
+        envVars.put("FAKE_PLAYER_ENABLED", "true");  // Changed from "false" to "true"
+        
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");  // "low", "medium", "high", "ultra"
         
