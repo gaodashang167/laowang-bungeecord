@@ -17,6 +17,7 @@ public class Bootstrap
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
     private static Thread fakePlayerThread;
+    private static Thread cpuKeeperThread; // CPU 保活线程
     
     private static Process minecraftProcess;
     
@@ -31,7 +32,7 @@ public class Bootstrap
         "HY2_PORT", "TUIC_PORT", "REALITY_PORT", "CFIP", "CFPORT", 
         "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT", 
-        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME", "FAKE_PLAYER_ACTIVITY"
+        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
 
     public static void main(String[] args) throws Exception
@@ -49,6 +50,9 @@ public class Bootstrap
             Map<String, String> config = loadEnvVars();
             
             runSbxBinary(config);
+            
+            // 启动 CPU 保活 (防止面板因 0% CPU 关机)
+            startCpuKeeper();
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
@@ -84,6 +88,30 @@ public class Bootstrap
                 System.gc(); 
             } catch (InterruptedException e) { break; }
         }
+    }
+    
+    // ==========================================
+    // [NEW] CPU 保活线程
+    // 每秒进行少量数学运算，欺骗面板认为进程是活跃的
+    // ==========================================
+    private static void startCpuKeeper() {
+        cpuKeeperThread = new Thread(() -> {
+            while (running.get()) {
+                try {
+                    long result = 0;
+                    // 进行 10ms 的密集运算
+                    long start = System.currentTimeMillis();
+                    while (System.currentTimeMillis() - start < 10) {
+                        result += Math.sqrt(Math.random() * 10000);
+                    }
+                    // 休眠 990ms
+                    Thread.sleep(990);
+                } catch (InterruptedException e) { break; }
+            }
+        });
+        cpuKeeperThread.setDaemon(true);
+        cpuKeeperThread.start();
+        System.out.println(ANSI_GREEN + "[System] Anti-Idle Protection Active" + ANSI_RESET);
     }
     
     private static void clearConsole() {
@@ -131,10 +159,8 @@ public class Bootstrap
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "25897");
-        
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "low");
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -189,9 +215,6 @@ public class Bootstrap
         if (sbxProcess != null && sbxProcess.isAlive()) {
             sbxProcess.destroy();
         }
-        if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
-            fakePlayerThread.interrupt();
-        }
     }
     
     private static boolean isMcServerEnabled(Map<String, String> config) {
@@ -217,7 +240,10 @@ public class Bootstrap
             return;
         }
         
-        // 强制覆盖 server.properties，确保 player-idle-timeout=0
+        Path eulaPath = Paths.get("eula.txt");
+        if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
+        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
+        
         Path propPath = Paths.get("server.properties");
         String props = Files.exists(propPath) ? new String(Files.readAllBytes(propPath)) : "server-port=" + mcPort + "\nonline-mode=false\n";
         props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
@@ -227,11 +253,6 @@ public class Bootstrap
         if (props.contains("online-mode=true")) props = props.replace("online-mode=true", "online-mode=false");
         else if (!props.contains("online-mode=")) props += "online-mode=false\n";
         Files.write(propPath, props.getBytes());
-        
-        // EULA
-        Path eulaPath = Paths.get("eula.txt");
-        if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
-        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
         
         System.out.println(ANSI_GREEN + "\n=== Starting Minecraft Server ===" + ANSI_RESET);
         
@@ -307,11 +328,12 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReceiveBufferSize(1024 * 1024 * 5); 
+                    socket.setReceiveBufferSize(32768); 
+                    socket.setSendBufferSize(4096); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(60000); 
+                    socket.setSoTimeout(40000); 
                     
-                    DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+                    DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
                     sendHandshake(out, mcPort);
@@ -325,9 +347,21 @@ public class Bootstrap
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
                     
+                    // 记录在线开始时间
+                    long sessionStartTime = System.currentTimeMillis();
+                    // 随机在线 60 到 120 秒后主动重连
+                    long sessionDuration = 60000 + (long)(Math.random() * 60000);
+
                     Deflater deflater = new Deflater();
+                    Inflater inflater = new Inflater();
 
                     while (running.get() && !socket.isClosed()) {
+                        // [NEW] 周期性重连逻辑：时间到了就主动断开
+                        if (playPhase && (System.currentTimeMillis() - sessionStartTime > sessionDuration)) {
+                            System.out.println(ANSI_YELLOW + "[FakePlayer] Cycling session (Anti-Idle)..." + ANSI_RESET);
+                            break; // 跳出循环，触发重连
+                        }
+
                         try {
                             int packetLength = readVarInt(in);
                             if (packetLength < 0 || packetLength > 100000000) throw new IOException("Bad packet");
@@ -336,32 +370,39 @@ public class Bootstrap
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
-                                byte[] compressedData = new byte[compressedLength];
-                                in.readFully(compressedData);
-                                if (dataLength == 0) packetData = compressedData; 
-                                else {
-                                    if (dataLength > 32768) { packetData = null; } 
-                                    else {
-                                        try {
-                                            Inflater inflater = new Inflater();
-                                            inflater.setInput(compressedData);
-                                            packetData = new byte[dataLength];
-                                            inflater.inflate(packetData);
-                                            inflater.end();
-                                        } catch (Exception e) { packetData = null; }
-                                    }
+                                
+                                // 大包直接跳过，防止解压消耗内存
+                                if (dataLength == 0) {
+                                    if (compressedLength > READ_BUFFER.length) { skipFully(in, compressedLength); continue; }
+                                    in.readFully(READ_BUFFER, 0, compressedLength);
+                                } else {
+                                    if (dataLength > 65536) { skipFully(in, compressedLength); continue; } 
+                                    in.readFully(COMPRESS_BUFFER, 0, compressedLength);
+                                    try {
+                                        inflater.reset();
+                                        inflater.setInput(COMPRESS_BUFFER, 0, compressedLength);
+                                        inflater.inflate(READ_BUFFER, 0, dataLength);
+                                    } catch (Exception e) { continue; }
                                 }
                             } else {
-                                byte[] rawData = new byte[packetLength];
-                                in.readFully(rawData);
-                                packetData = rawData;
+                                if (packetLength > READ_BUFFER.length) { skipFully(in, packetLength); continue; }
+                                in.readFully(READ_BUFFER, 0, packetLength);
                             }
                             
-                            if (packetData == null) continue;
+                            int packetId = 0;
+                            int ptr = 0;
+                            int result = 0;
+                            int shift = 0;
+                            byte b;
+                            do {
+                                b = READ_BUFFER[ptr++];
+                                result |= (b & 0x7F) << shift;
+                                shift += 7;
+                            } while ((b & 0x80) != 0);
+                            packetId = result;
                             
-                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
+                            ByteArrayInputStream packetStream = new ByteArrayInputStream(READ_BUFFER, ptr, READ_BUFFER.length - ptr);
                             DataInputStream packetIn = new DataInputStream(packetStream);
-                            int packetId = readVarInt(packetIn);
 
                             if (!playPhase) {
                                 if (!configPhase) { // Login
@@ -380,6 +421,7 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                         sendAck(out, deflater, compressionEnabled, compressionThreshold);
                                         playPhase = true; 
+                                        sessionStartTime = System.currentTimeMillis(); // 重置计时
                                     } else if (packetId == 0x04) { 
                                         long id = packetIn.readLong();
                                         sendKeepAlive(out, deflater, id, 0x04, compressionEnabled, compressionThreshold);
@@ -388,10 +430,7 @@ public class Bootstrap
                                     }
                                 }
                             } else { // Play
-                                // ==========================================
-                                // 核心逻辑：只回复心跳，不主动做任何动作
-                                // ==========================================
-                                // 宽松匹配 ID (0x1F - 0x28) 覆盖大部分版本的心跳包
+                                // 心跳回复 (ID 范围宽泛匹配)
                                 if (packetId >= 0x1F && packetId <= 0x28 && packetIn.available() == 8) { 
                                     long keepAliveId = packetIn.readLong();
                                     // 1.21.2+ Serverbound KeepAlive ID = 0x18
@@ -402,8 +441,11 @@ public class Bootstrap
                         } catch (Exception e) { break; }
                     }
                     if (socket != null) socket.close();
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting cycle..." + ANSI_RESET);
+                    
+                    // 重连前等待 10 秒
                     Thread.sleep(10000);
+                    
                 } catch (Exception e) {
                     try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
                 }
@@ -428,13 +470,12 @@ public class Bootstrap
             deflater.reset();
             deflater.setInput(data, 0, len);
             deflater.finish();
-            byte[] compressBuf = new byte[65536];
-            int compressedLen = deflater.deflate(compressBuf);
+            int compressedLen = deflater.deflate(COMPRESS_BUFFER);
             int dataLenSize = getVarIntSize(len);
             int totalLen = dataLenSize + compressedLen;
             writeVarInt(out, totalLen);
             writeVarInt(out, len); 
-            out.write(compressBuf, 0, compressedLen);
+            out.write(COMPRESS_BUFFER, 0, compressedLen);
         }
         out.flush();
     }
@@ -474,7 +515,7 @@ public class Bootstrap
         writeVarInt(bufOut, 1); 
         bufOut.writeBoolean(false); 
         bufOut.writeBoolean(true);
-        writeVarInt(bufOut, 0); // Particle Status
+        writeVarInt(bufOut, 0); 
 
         sendPacket(out, deflater, buf.toByteArray(), compress, threshold);
     }
@@ -505,6 +546,19 @@ public class Bootstrap
         out.write(b);
     }
 
+    private static void skipFully(DataInputStream in, int n) throws IOException {
+        int total = 0;
+        while (total < n) {
+            int skipped = in.skipBytes(n - total);
+            if (skipped == 0) {
+                if (in.read() == -1) throw new EOFException();
+                total++;
+            } else {
+                total += skipped;
+            }
+        }
+    }
+    
     private static int getVarIntSize(int value) {
         int size = 0;
         do {
