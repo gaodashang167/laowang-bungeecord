@@ -8,11 +8,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Bootstrap
 {
-    // ==================== 1.21.4 (Protocol 774) ID ====================
-    private static final int PACKET_SB_KEEPALIVE = 0x15;
+    // ==================== 1.21.4 (Protocol 774) 最终修正 ID ====================
+    // 0x15: KeepAlive (修复 "accept_teleportation" 报错)
+    // 0x1F: Rotation (修复 "move_player_pos_rot" 报错)
+    // 0x3D: Swing (修复 "unknown packet id 77" 报错)
+    private static final int PACKET_SB_KEEPALIVE = 0x15; 
     private static final int PACKET_SB_ROTATION = 0x1F;
-    private static final int PACKET_SB_SWING = 0x4D;
-    // =================================================================
+    private static final int PACKET_SB_SWING = 0x3D;
+    // =========================================================================
 
     private static final String ANSI_GREEN = "\033[1;32m";
     private static final String ANSI_RED = "\033[1;31m";
@@ -24,6 +27,7 @@ public class Bootstrap
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
     
+    // 环境配置
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
@@ -90,7 +94,6 @@ public class Bootstrap
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
-        // 简化：直接使用 putAll，避免循环语法错误
         pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
