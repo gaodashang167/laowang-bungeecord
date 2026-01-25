@@ -21,9 +21,9 @@ public class Bootstrap
     private static Process minecraftProcess;
     
     // ==========================================
-    // 缓冲区扩容至 512KB，以应对进服瞬间的大包
+    // 内存优化核心：全局复用缓冲区 (512KB)
     // ==========================================
-    private static final int BUFFER_SIZE = 524288; // 512KB
+    private static final int BUFFER_SIZE = 524288; 
     private static final byte[] SEND_BUFFER = new byte[BUFFER_SIZE]; 
     private static final byte[] READ_BUFFER = new byte[BUFFER_SIZE]; 
     private static final byte[] COMPRESS_BUFFER = new byte[BUFFER_SIZE];
@@ -39,7 +39,6 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        // 降低优先级，给系统喘息机会
         Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
 
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
@@ -87,7 +86,7 @@ public class Bootstrap
         while (running.get()) {
             try {
                 Thread.sleep(10000);
-                // 定期 GC 这里的频率要低
+                System.gc(); // 定期清理内存
             } catch (InterruptedException e) {
                 break;
             }
@@ -251,7 +250,7 @@ public class Bootstrap
         cmd.add("-XX:+UseSerialGC"); 
         cmd.add("-XX:MinHeapFreeRatio=5"); 
         cmd.add("-XX:MaxHeapFreeRatio=10");
-        // 限制 Netty 堆外内存
+        // 限制 Netty 堆外内存，防止 OOM
         cmd.add("-Dio.netty.maxDirectMemory=67108864"); // 64MB
         
         cmd.add("-jar");
@@ -315,7 +314,6 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         
         fakePlayerThread = new Thread(() -> {
-            // 在循环外创建，复用对象
             Inflater inflater = new Inflater();
             Deflater deflater = new Deflater(); 
             
@@ -324,7 +322,7 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReceiveBufferSize(65536); // 64KB
+                    socket.setReceiveBufferSize(32768); // 32KB
                     socket.setSendBufferSize(4096); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
@@ -392,6 +390,7 @@ public class Bootstrap
                                 ptr = 0;
                             }
 
+                            // 极简包ID读取
                             int packetId = 0;
                             int result = 0;
                             int shift = 0;
@@ -416,7 +415,8 @@ public class Bootstrap
                                     } else if (packetId == 0x02) { 
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                         sendAck(out, deflater, compressionEnabled, compressionThreshold);
-                                        Thread.sleep(50);
+                                        // 等待状态切换
+                                        Thread.sleep(100);
                                         configPhase = true;
                                         sendClientSettings(out, deflater, compressionEnabled, compressionThreshold);
                                     }
@@ -439,18 +439,14 @@ public class Bootstrap
                                     sendKeepAlive(out, deflater, keepAliveId, 0x1B, compressionEnabled, compressionThreshold);
                                 }
                             }
-                        } catch (Exception e) {
-                            break;
-                        }
+                        } catch (Exception e) { break; }
                     }
                     if (socket != null) socket.close();
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
                 } catch (Exception e) {
                     try { 
-                        // 强制 GC 清理内存
                         System.gc();
-                        // 强制休眠防止 CPU 爆满
                         Thread.sleep(5000); 
                     } catch (InterruptedException ex) { break; }
                 }
@@ -461,6 +457,8 @@ public class Bootstrap
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
     }
+    
+    // ================== Zero-Allocation Sending Utils ==================
     
     private static synchronized void sendPacketRaw(DataOutputStream out, Deflater deflater, byte[] data, int len, boolean compress, int threshold) throws IOException {
         if (!compress || len < threshold) {
@@ -523,7 +521,9 @@ public class Bootstrap
         writeVarInt(bufOut, 1); 
         bufOut.writeBoolean(false); 
         bufOut.writeBoolean(true);
-        // [FIX] Removed 1.21.2 field for compatibility
+        
+        // [FIX] 补回字段：Particle Status (VarInt) - 1.21.2+ 必须
+        writeVarInt(bufOut, 0); 
 
         byte[] b = buf.toByteArray();
         System.arraycopy(b, 0, SEND_BUFFER, 0, b.length);
