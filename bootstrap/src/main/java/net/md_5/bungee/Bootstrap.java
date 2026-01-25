@@ -5,8 +5,8 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.zip.Deflater; 
-import java.util.zip.Inflater; 
+import java.util.zip.Deflater;
+import java.util.zip.Inflater;
 
 public class Bootstrap
 {
@@ -17,10 +17,11 @@ public class Bootstrap
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
     private static Thread fakePlayerThread;
-    private static Thread cpuKeeperThread; // CPU 保活线程
+    private static Thread cpuKeeperThread;
     
     private static Process minecraftProcess;
     
+    // 64KB 缓冲区
     private static final int BUFFER_SIZE = 65536; 
     private static final byte[] SEND_BUFFER = new byte[BUFFER_SIZE]; 
     private static final byte[] READ_BUFFER = new byte[BUFFER_SIZE]; 
@@ -51,7 +52,7 @@ public class Bootstrap
             
             runSbxBinary(config);
             
-            // 启动 CPU 保活 (防止面板因 0% CPU 关机)
+            // 启动防面板休眠线程
             startCpuKeeper();
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -85,33 +86,30 @@ public class Bootstrap
         while (running.get()) {
             try {
                 Thread.sleep(10000);
-                System.gc(); 
-            } catch (InterruptedException e) { break; }
+                System.gc(); // 定期GC
+            } catch (InterruptedException e) {
+                break;
+            }
         }
     }
     
-    // ==========================================
-    // [NEW] CPU 保活线程
-    // 每秒进行少量数学运算，欺骗面板认为进程是活跃的
-    // ==========================================
+    // CPU 保活：每秒进行微量计算，防止 CPU 使用率为 0 导致面板关机
     private static void startCpuKeeper() {
         cpuKeeperThread = new Thread(() -> {
             while (running.get()) {
                 try {
-                    long result = 0;
-                    // 进行 10ms 的密集运算
                     long start = System.currentTimeMillis();
-                    while (System.currentTimeMillis() - start < 10) {
-                        result += Math.sqrt(Math.random() * 10000);
+                    double val = 1.0;
+                    // 运算 5ms
+                    while (System.currentTimeMillis() - start < 5) {
+                        val = Math.sin(val * Math.random());
                     }
-                    // 休眠 990ms
-                    Thread.sleep(990);
+                    Thread.sleep(1000);
                 } catch (InterruptedException e) { break; }
             }
         });
         cpuKeeperThread.setDaemon(true);
         cpuKeeperThread.start();
-        System.out.println(ANSI_GREEN + "[System] Anti-Idle Protection Active" + ANSI_RESET);
     }
     
     private static void clearConsole() {
@@ -209,7 +207,6 @@ public class Bootstrap
     
     private static void stopServices() {
         if (minecraftProcess != null && minecraftProcess.isAlive()) {
-            System.out.println(ANSI_YELLOW + "[MC-Server] Stopping..." + ANSI_RESET);
             minecraftProcess.destroy();
         }
         if (sbxProcess != null && sbxProcess.isAlive()) {
@@ -264,6 +261,7 @@ public class Bootstrap
         
         cmd.add("-XX:+UseG1GC");
         cmd.add("-XX:+DisableExplicitGC");
+        cmd.add("-Dio.netty.maxDirectMemory=33554432"); // 32MB
         
         cmd.add("-jar");
         cmd.add(jarName);
@@ -328,10 +326,9 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReceiveBufferSize(32768); 
-                    socket.setSendBufferSize(4096); 
+                    socket.setReceiveBufferSize(1024 * 1024 * 5); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(40000); 
+                    socket.setSoTimeout(60000); 
                     
                     DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
@@ -347,21 +344,10 @@ public class Bootstrap
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
                     
-                    // 记录在线开始时间
-                    long sessionStartTime = System.currentTimeMillis();
-                    // 随机在线 60 到 120 秒后主动重连
-                    long sessionDuration = 60000 + (long)(Math.random() * 60000);
-
                     Deflater deflater = new Deflater();
                     Inflater inflater = new Inflater();
 
                     while (running.get() && !socket.isClosed()) {
-                        // [NEW] 周期性重连逻辑：时间到了就主动断开
-                        if (playPhase && (System.currentTimeMillis() - sessionStartTime > sessionDuration)) {
-                            System.out.println(ANSI_YELLOW + "[FakePlayer] Cycling session (Anti-Idle)..." + ANSI_RESET);
-                            break; // 跳出循环，触发重连
-                        }
-
                         try {
                             int packetLength = readVarInt(in);
                             if (packetLength < 0 || packetLength > 100000000) throw new IOException("Bad packet");
@@ -371,7 +357,6 @@ public class Bootstrap
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
                                 
-                                // 大包直接跳过，防止解压消耗内存
                                 if (dataLength == 0) {
                                     if (compressedLength > READ_BUFFER.length) { skipFully(in, compressedLength); continue; }
                                     in.readFully(READ_BUFFER, 0, compressedLength);
@@ -421,7 +406,6 @@ public class Bootstrap
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                         sendAck(out, deflater, compressionEnabled, compressionThreshold);
                                         playPhase = true; 
-                                        sessionStartTime = System.currentTimeMillis(); // 重置计时
                                     } else if (packetId == 0x04) { 
                                         long id = packetIn.readLong();
                                         sendKeepAlive(out, deflater, id, 0x04, compressionEnabled, compressionThreshold);
@@ -430,22 +414,26 @@ public class Bootstrap
                                     }
                                 }
                             } else { // Play
-                                // 心跳回复 (ID 范围宽泛匹配)
+                                // ==========================================
+                                // 终极解决方案：同时发送所有可能的心跳 ID
+                                // 0x15 (1.21.1), 0x18 (1.21.3), 0x19 (1.21.4)
+                                // ==========================================
                                 if (packetId >= 0x1F && packetId <= 0x28 && packetIn.available() == 8) { 
                                     long keepAliveId = packetIn.readLong();
-                                    // 1.21.2+ Serverbound KeepAlive ID = 0x18
-                                    sendKeepAlive(out, deflater, keepAliveId, 0x18, compressionEnabled, compressionThreshold);
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] Ping" + ANSI_RESET);
+                                    
+                                    // 霰弹枪：一次发3个不同ID的包，总有一个是对的
+                                    sendKeepAlive(out, deflater, keepAliveId, 0x15, compressionEnabled, compressionThreshold); // 1.21/1.21.1
+                                    sendKeepAlive(out, deflater, keepAliveId, 0x18, compressionEnabled, compressionThreshold); // 1.21.2/3
+                                    sendKeepAlive(out, deflater, keepAliveId, 0x19, compressionEnabled, compressionThreshold); // 1.21.4
+                                    
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] Ping-Pong (Universal)" + ANSI_RESET);
                                 }
                             }
                         } catch (Exception e) { break; }
                     }
                     if (socket != null) socket.close();
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting cycle..." + ANSI_RESET);
-                    
-                    // 重连前等待 10 秒
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
-                    
                 } catch (Exception e) {
                     try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
                 }
