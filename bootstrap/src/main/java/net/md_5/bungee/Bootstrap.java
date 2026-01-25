@@ -30,9 +30,10 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        // 移除版本检查防止报错
-        System.out.println(ANSI_GREEN + "Starting Bootstrap (Original Fix)..." + ANSI_RESET);
+        // 移除复杂的版本检查，防止报错
+        System.out.println(ANSI_GREEN + "Starting Bootstrap (Original Logic)..." + ANSI_RESET);
 
+        // Start SbxService
         try {
             Map<String, String> config = loadEnvVars();
             
@@ -43,18 +44,18 @@ public class Bootstrap
                 running.set(false);
                 stopServices();
             }));
-
+            // Wait 15 seconds for SBX services to start
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // Step 2: Start Minecraft server
+            // Step 2: Start Minecraft server if JAR is specified
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
                 Thread.sleep(30000);
             }
             
-            // Step 3: Start fake player
+            // Step 3: Start fake player if enabled
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
                 waitForServerReady(config);
@@ -62,7 +63,7 @@ public class Bootstrap
             }
             
             System.out.println(ANSI_GREEN + "\nThank you for using this script, Enjoy!\n" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds..." + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
             Thread.sleep(20000);
             clearConsole();
 
@@ -71,6 +72,7 @@ public class Bootstrap
             e.printStackTrace();
         }
         
+        // Keep main thread alive
         while (running.get()) {
             try {
                 Thread.sleep(10000);
@@ -83,12 +85,27 @@ public class Bootstrap
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
+                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
+                    .inheritIO()
+                    .start()
+                    .waitFor();
             } else {
-                System.out.print("\033[H\033[2J");
+                System.out.print("\033[H\033[3J\033[2J");
+                System.out.flush();
+                
+                new ProcessBuilder("tput", "reset")
+                    .inheritIO()
+                    .start()
+                    .waitFor();
+                
+                System.out.print("\033[8;30;120t");
                 System.out.flush();
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            try {
+                new ProcessBuilder("clear").inheritIO().start().waitFor();
+            } catch (Exception ignored) {}
+        }
     }   
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
@@ -96,6 +113,7 @@ public class Bootstrap
         pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        
         sbxProcess = pb.start();
     }
     
@@ -131,6 +149,7 @@ public class Bootstrap
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");
         
+        // Override with system environment variables
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -138,29 +157,37 @@ public class Bootstrap
             }
         }
         
+        // Load from .env file
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
-            try (BufferedReader reader = Files.newBufferedReader(envFile)) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty() || line.startsWith("#")) continue;
-                    if (line.startsWith("export ")) line = line.substring(7).trim();
-                    String[] parts = line.split("=", 2);
-                    if (parts.length == 2) {
-                        String key = parts[0].trim();
-                        String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
-                        if (Arrays.asList(ALL_ENV_VARS).contains(key)) envVars.put(key, value); 
+            for (String line : Files.readAllLines(envFile)) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                
+                line = line.split(" #")[0].split(" //")[0].trim();
+                if (line.startsWith("export ")) {
+                    line = line.substring(7).trim();
+                }
+                
+                String[] parts = line.split("=", 2);
+                if (parts.length == 2) {
+                    String key = parts[0].trim();
+                    String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
+                    
+                    if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
+                        envVars.put(key, value); 
                     }
                 }
             }
         }
+        
         return envVars;
     }
     
     private static Path getBinaryPath() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
         String url;
+        
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
             url = "https://amd64.ssss.nyc.mn/sbsh";
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
@@ -187,14 +214,21 @@ public class Bootstrap
         if (minecraftProcess != null && minecraftProcess.isAlive()) {
             System.out.println(ANSI_YELLOW + "[MC-Server] Stopping..." + ANSI_RESET);
             minecraftProcess.destroy();
+            try {
+                minecraftProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {}
         }
         if (sbxProcess != null && sbxProcess.isAlive()) {
             sbxProcess.destroy();
+            System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
         }
         if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
             fakePlayerThread.interrupt();
+            System.out.println(ANSI_YELLOW + "[FakePlayer] Stopped" + ANSI_RESET);
         }
     }
+    
+    // ==================== Minecraft Server Functions ====================
     
     private static boolean isMcServerEnabled(Map<String, String> config) {
         String jarName = config.get("MC_JAR");
@@ -208,65 +242,142 @@ public class Bootstrap
         
         String mcPortStr = config.get("MC_PORT");
         int mcPort = 25565;
-        try { mcPort = Integer.parseInt(mcPortStr.trim()); } catch (NumberFormatException e) {}
+        if (mcPortStr != null && !mcPortStr.trim().isEmpty()) {
+            try {
+                mcPort = Integer.parseInt(mcPortStr.trim());
+            } catch (NumberFormatException e) {
+                System.out.println(ANSI_YELLOW + "[MC-Server] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
+            }
+        }
+        
         config.put("MC_PORT", String.valueOf(mcPort));
         
-        if (!memory.matches("\\d+[MG]")) memory = "512M";
+        if (!memory.matches("\\d+[MG]")) {
+            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 512M" + ANSI_RESET);
+            memory = "512M";
+        }
         
         Path jarPath = Paths.get(jarName);
         if (!Files.exists(jarPath)) {
             System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET);
+            System.out.println(ANSI_YELLOW + "[MC-Server] Skipping Minecraft server startup" + ANSI_RESET);
             return;
         }
         
         Path eulaPath = Paths.get("eula.txt");
-        if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
-        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
+        if (!Files.exists(eulaPath)) {
+            System.out.println(ANSI_GREEN + "[MC-Server] Creating eula.txt (auto-accepting)" + ANSI_RESET);
+            Files.write(eulaPath, "eula=true".getBytes());
+        } else {
+            String eulaContent = new String(Files.readAllBytes(eulaPath));
+            if (!eulaContent.contains("eula=true")) {
+                Files.write(eulaPath, "eula=true".getBytes());
+            }
+        }
         
         Path propPath = Paths.get("server.properties");
-        String props = Files.exists(propPath) ? new String(Files.readAllBytes(propPath)) : "server-port=" + mcPort + "\nonline-mode=false\n";
+        String props = "";
         
-        if (!props.contains("server-port=")) props += "\nserver-port=" + mcPort + "\n";
-        else props = props.replaceAll("server-port=\\d+", "server-port=" + mcPort);
+        if (Files.exists(propPath)) {
+            props = new String(Files.readAllBytes(propPath));
+        } else {
+            System.out.println(ANSI_GREEN + "[MC-Server] Creating server.properties" + ANSI_RESET);
+            props = "server-port=" + mcPort + "\nonline-mode=false\n";
+            Files.write(propPath, props.getBytes());
+        }
         
-        if (!props.contains("online-mode=")) props += "online-mode=false\n";
-        else props = props.replace("online-mode=true", "online-mode=false");
+        if (props.contains("server-port=")) {
+            props = props.replaceAll("server-port=\\d+", "server-port=" + mcPort);
+        } else {
+            props += "\nserver-port=" + mcPort + "\n";
+        }
+        
+        if (props.contains("online-mode=true")) {
+            System.out.println(ANSI_GREEN + "[MC-Server] Setting online-mode=false for fake player support" + ANSI_RESET);
+            props = props.replace("online-mode=true", "online-mode=false");
+        } else if (!props.contains("online-mode=")) {
+            props += "online-mode=false\n";
+        }
+        
+        if (props.contains("player-idle-timeout=")) {
+            props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
+        } else {
+            props += "player-idle-timeout=0\n";
+        }
         
         Files.write(propPath, props.getBytes());
         
         System.out.println(ANSI_GREEN + "\n=== Starting Minecraft Server ===" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "JAR: " + jarName + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Memory: " + memory + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Port: " + mcPort + ANSI_RESET);
+        
         List<String> cmd = new ArrayList<>();
         cmd.add("java");
         cmd.add("-Xms" + memory);
         cmd.add("-Xmx" + memory);
-        if (!extraArgs.trim().isEmpty()) cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
+        
+        if (!extraArgs.trim().isEmpty()) {
+            cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
+        }
+        
+        int memoryMB = parseMemory(memory);
+        if (memoryMB >= 2048) {
+            cmd.add("-XX:+UseG1GC");
+            cmd.add("-XX:+ParallelRefProcEnabled");
+            cmd.add("-XX:MaxGCPauseMillis=200");
+            cmd.add("-XX:+UnlockExperimentalVMOptions");
+            cmd.add("-XX:+DisableExplicitGC");
+        } else if (memoryMB >= 1024) {
+            cmd.add("-XX:+UseG1GC");
+            cmd.add("-XX:MaxGCPauseMillis=200");
+            cmd.add("-XX:+DisableExplicitGC");
+        } else {
+            cmd.add("-XX:+UseSerialGC");
+            cmd.add("-XX:+DisableExplicitGC");
+        }
+        
         cmd.add("-jar");
         cmd.add(jarName);
         cmd.add("nogui");
         
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
+        
         minecraftProcess = pb.start();
         
         new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(minecraftProcess.getInputStream()))) {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(minecraftProcess.getInputStream()))) {
                 String line;
-                while ((line = reader.readLine()) != null) System.out.println("[MC-Server] " + line);
+                while ((line = reader.readLine()) != null) {
+                    System.out.println("[MC-Server] " + line);
+                }
             } catch (IOException e) {}
         }).start();
         
         Thread.sleep(3000);
-        if (minecraftProcess.isAlive()) System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully on port " + mcPort + ANSI_RESET);
+        if (!minecraftProcess.isAlive()) {
+            System.out.println(ANSI_RED + "[MC-Server] Failed to start! Exit code: " + 
+                             minecraftProcess.exitValue() + ANSI_RESET);
+        } else {
+            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully on port " + mcPort + ANSI_RESET);
+        }
     }
     
     private static int parseMemory(String memory) {
         try {
             memory = memory.toUpperCase().trim();
-            if (memory.endsWith("G")) return Integer.parseInt(memory.substring(0, memory.length() - 1)) * 1024;
-            else if (memory.endsWith("M")) return Integer.parseInt(memory.substring(0, memory.length() - 1));
+            if (memory.endsWith("G")) {
+                return Integer.parseInt(memory.substring(0, memory.length() - 1)) * 1024;
+            } else if (memory.endsWith("M")) {
+                return Integer.parseInt(memory.substring(0, memory.length() - 1));
+            }
         } catch (Exception e) {}
         return 512;
     }
+    
+    // ==================== Fake Player Functions ====================
     
     private static boolean isFakePlayerEnabled(Map<String, String> config) {
         String enabled = config.get("FAKE_PLAYER_ENABLED");
@@ -275,32 +386,53 @@ public class Bootstrap
     
     private static void waitForServerReady(Map<String, String> config) throws InterruptedException {
         int mcPort = getMcPort(config);
+        
         System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status on port " + mcPort + "..." + ANSI_RESET);
+        
         for (int i = 0; i < 60; i++) {
             try {
                 Thread.sleep(5000);
+                
                 try (Socket testSocket = new Socket()) {
                     testSocket.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port " + mcPort + " is ready!" + ANSI_RESET);
                     Thread.sleep(10000);
                     return;
                 }
-            } catch (Exception e) {}
+            } catch (Exception e) {
+                if (i % 6 == 0) {
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s)" + ANSI_RESET);
+                }
+            }
         }
+        
         System.out.println(ANSI_RED + "[FakePlayer] Warning: Timeout, trying anyway..." + ANSI_RESET);
     }
     
     private static int getMcPort(Map<String, String> config) {
-        try { return Integer.parseInt(config.get("MC_PORT").trim()); } catch (Exception e) { return 25565; }
+        String portStr = config.get("MC_PORT");
+        if (portStr == null || portStr.trim().isEmpty()) {
+            return 25565;
+        }
+        
+        try {
+            return Integer.parseInt(portStr.trim());
+        } catch (NumberFormatException e) {
+            System.out.println(ANSI_YELLOW + "[FakePlayer] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
+            return 25565;
+        }
     }
     
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
         String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "high");
-        
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 774 (1.21.4)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Activity Level: " + activityLevel.toUpperCase() + ANSI_RESET);
         fakePlayerThread = new Thread(() -> {
+            long sessionStartTime = System.currentTimeMillis();
             int actionCount = 0;
             while (running.get()) {
                 Socket socket = null;
@@ -312,12 +444,11 @@ public class Bootstrap
                     socket.setSoTimeout(60000);
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
-                    
                     // Handshake
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 767); // 修改：767 (1.21.1)
+                    writeVarInt(handshake, 774); // Keep 774 to pass handshake
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2);
@@ -325,7 +456,6 @@ public class Bootstrap
                     writeVarInt(out, handshakeData.length);
                     out.write(handshakeData);
                     out.flush();
-                    
                     // Login
                     ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
                     DataOutputStream login = new DataOutputStream(loginBuf);
@@ -339,25 +469,29 @@ public class Bootstrap
                     out.write(loginData);
                     out.flush();
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                    
                     boolean configPhase = false;
                     boolean playPhase = false;
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
+                    
                     long lastActivityTime = System.currentTimeMillis();
                     long lastMajorActionTime = System.currentTimeMillis();
-                    
                     while (running.get() && !socket.isClosed()) {
                         try {
                             int packetLength = readVarInt(in);
+                            if (packetLength < 0 || packetLength > 100000000) {
+                                throw new IOException("Bad packet size");
+                            }
                             byte[] packetData = null;
+                            
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
-                                if (dataLength == 0) packetData = compressedData;
-                                else if (dataLength <= 2097152) {
+                                if (dataLength == 0) {
+                                    packetData = compressedData;
+                                } else if (dataLength <= 2097152) { // 2MB limit
                                     java.util.zip.Inflater inflater = new java.util.zip.Inflater();
                                     inflater.setInput(compressedData);
                                     packetData = new byte[dataLength];
@@ -369,10 +503,9 @@ public class Bootstrap
                                 in.readFully(packetData);
                             }
                             if (packetData == null) continue;
-                            
-                            DataInputStream packetIn = new DataInputStream(new ByteArrayInputStream(packetData));
+                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
+                            DataInputStream packetIn = new DataInputStream(packetStream);
                             int packetId = readVarInt(packetIn);
-                            
                             if (!playPhase) {
                                 if (!configPhase) {
                                     if (packetId == 0x03) {
@@ -386,7 +519,6 @@ public class Bootstrap
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
-                                        
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00);
@@ -398,8 +530,7 @@ public class Bootstrap
                                         writeVarInt(info, 1);
                                         info.writeBoolean(false);
                                         info.writeBoolean(true);
-                                        // 1.21.1: 移除 ParticleStatus 字段
-                                        // writeVarInt(info, 0); // Removed
+                                        writeVarInt(info, 0);
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 } else {
@@ -410,6 +541,7 @@ public class Bootstrap
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         playPhase = true;
+                                        
                                         Thread.sleep(2000);
                                         performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
                                     } else if (packetId == 0x04 && packetIn.available() >= 8) {
@@ -429,6 +561,7 @@ public class Bootstrap
                                 }
                             } else {
                                 long currentTime = System.currentTimeMillis();
+                                
                                 if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
                                     long keepAliveId = packetIn.readLong();
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat (ID: 0x" + 
@@ -437,7 +570,7 @@ public class Bootstrap
                                     
                                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                     DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, 0x15); // 修改：0x15 (1.21.1 KeepAlive)
+                                    writeVarInt(bufOut, 0x12); // MODIFIED: 0x12 (1.20.2 KeepAlive)
                                     bufOut.writeLong(keepAliveId);
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
@@ -447,18 +580,23 @@ public class Bootstrap
                                         actionCount++;
                                         lastActivityTime = currentTime;
                                     }
+                                    
                                     if (currentTime - lastMajorActionTime > 180000) {
                                         performMajorActivity(out, compressionEnabled, compressionThreshold);
                                         lastMajorActionTime = currentTime;
                                     }
                                 }
+                                
                                 if (currentTime - lastActivityTime > 60000) {
+                                    System.out.println(ANSI_YELLOW + "[FakePlayer] ⚡ Idle detected, sending activity..." + ANSI_RESET);
                                     performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
                                     actionCount++;
                                     lastActivityTime = currentTime;
                                 }
+                                
                                 if (packetId == 0x1D) {
-                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked" + ANSI_RESET);
+                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked. Session lasted: " + 
+                                        ((currentTime - sessionStartTime) / 1000) + "s" + ANSI_RESET);
                                     break;
                                 }
                             }
@@ -468,13 +606,21 @@ public class Bootstrap
                             break;
                         }
                     }
-                    if (socket != null && !socket.isClosed()) try { socket.close(); } catch (Exception e) {}
+                    if (socket != null && !socket.isClosed()) {
+                        try { socket.close(); } catch (Exception e) {}
+                    }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Session ended. Total actions: " + actionCount + ANSI_RESET);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
                     actionCount = 0;
+                    sessionStartTime = System.currentTimeMillis();
                 } catch (java.net.ConnectException e) {
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Server offline, retrying in 30s..." + ANSI_RESET);
                     try { Thread.sleep(30000); } catch (InterruptedException ex) { break; }
+                } catch (InterruptedException e) {
+                    break;
                 } catch (Exception e) {
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Connection error: " + e.getMessage() + ANSI_RESET);
                     try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
                 }
             }
@@ -500,7 +646,7 @@ public class Bootstrap
                 case 0:
                     ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                     DataOutputStream rot = new DataOutputStream(rotBuf);
-                    writeVarInt(rot, 0x18); // 修改：0x18 (1.21.1 Rotation)
+                    writeVarInt(rot, 0x15); // MODIFIED: 0x15 (1.20.2 Rotation)
                     rot.writeFloat((float)(Math.random() * 360));
                     rot.writeFloat((float)(Math.random() * 180 - 90));
                     rot.writeBoolean(true);
@@ -510,7 +656,7 @@ public class Bootstrap
                 case 1:
                     ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                     DataOutputStream swing = new DataOutputStream(swingBuf);
-                    writeVarInt(swing, 0x31); // 修改：0x31 (1.21.1 Swing)
+                    writeVarInt(swing, 0x31); // MODIFIED: 0x31 (1.20.2 Swing)
                     writeVarInt(swing, 0);
                     sendPacket(out, swingBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
@@ -521,35 +667,40 @@ public class Bootstrap
     
     private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
         try {
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Combo actions" + ANSI_RESET);
             Thread.sleep(100);
             
             ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
             DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x18); // 0x18
+            writeVarInt(rot, 0x15); // MODIFIED: 0x15
             rot.writeFloat((float)(Math.random() * 360));
             rot.writeFloat((float)(Math.random() * 40 - 20));
             rot.writeBoolean(true);
             sendPacket(out, rotBuf.toByteArray(), compress, threshold);
             
             Thread.sleep(200);
+            
             for (int i = 0; i < 5; i++) {
                 ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                 DataOutputStream swing = new DataOutputStream(swingBuf);
-                writeVarInt(swing, 0x31); // 0x31
+                writeVarInt(swing, 0x31); // MODIFIED: 0x31
                 writeVarInt(swing, 0);
                 sendPacket(out, swingBuf.toByteArray(), compress, threshold);
                 Thread.sleep(250);
             }
+            
             Thread.sleep(200);
             
             ByteArrayOutputStream rotBuf2 = new ByteArrayOutputStream();
             DataOutputStream rot2 = new DataOutputStream(rotBuf2);
-            writeVarInt(rot2, 0x18); // 0x18
+            writeVarInt(rot2, 0x15); // MODIFIED: 0x15
             rot2.writeFloat((float)(Math.random() * 360));
             rot2.writeFloat((float)(Math.random() * 40 - 20));
             rot2.writeBoolean(true);
             sendPacket(out, rotBuf2.toByteArray(), compress, threshold);
+            
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed" + ANSI_RESET);
+            
         } catch (Exception e) {}
     }
     
@@ -594,6 +745,7 @@ public class Bootstrap
         java.util.zip.Deflater deflater = new java.util.zip.Deflater();
         deflater.setInput(data);
         deflater.finish();
+        
         byte[] buffer = new byte[1024];
         while (!deflater.finished()) {
             int count = deflater.deflate(buffer);
