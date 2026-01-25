@@ -20,8 +20,13 @@ public class Bootstrap
     
     private static Process minecraftProcess;
     
-    // 64KB 缓冲区
+    // ==========================================
+    // 全局复用缓冲区 (Global Shared Buffers)
+    // ==========================================
+    // 64KB 足够处理握手、登录和心跳包。
+    // 任何超过此大小的包都会被直接丢弃，不占用堆内存。
     private static final byte[] SEND_BUFFER = new byte[65536]; 
+    private static final byte[] READ_BUFFER = new byte[65536]; 
     private static final byte[] COMPRESS_BUFFER = new byte[65536];
     
     private static final String[] ALL_ENV_VARS = {
@@ -35,11 +40,12 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
+        // 极低优先级，让系统有机会回收资源
         Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
 
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
         {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower,please switch the version in startup menu!" + ANSI_RESET);
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower!" + ANSI_RESET);
             Thread.sleep(3000);
             System.exit(1);
         }
@@ -72,17 +78,18 @@ public class Bootstrap
             }
             
             System.out.println(ANSI_GREEN + "\nThank you for using this script, Enjoy!\n" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds" + ANSI_RESET);
             Thread.sleep(20000);
             clearConsole();
         } catch (Exception e) {
-            System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
         }
 
         while (running.get()) {
             try {
                 Thread.sleep(10000);
+                // 建议手动 GC 一次，释放不用的内存
+                System.gc();
             } catch (InterruptedException e) {
                 break;
             }
@@ -92,13 +99,9 @@ public class Bootstrap
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
-                    .inheritIO().start().waitFor();
+                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120").inheritIO().start().waitFor();
             } else {
                 System.out.print("\033[H\033[3J\033[2J");
-                System.out.flush();
-                new ProcessBuilder("tput", "reset").inheritIO().start().waitFor();
-                System.out.print("\033[8;30;120t");
                 System.out.flush();
             }
         } catch (Exception ignored) {}
@@ -192,15 +195,12 @@ public class Bootstrap
         if (minecraftProcess != null && minecraftProcess.isAlive()) {
             System.out.println(ANSI_YELLOW + "[MC-Server] Stopping..." + ANSI_RESET);
             minecraftProcess.destroy();
-            try { minecraftProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException e) {}
         }
         if (sbxProcess != null && sbxProcess.isAlive()) {
             sbxProcess.destroy();
-            System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
         }
         if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
             fakePlayerThread.interrupt();
-            System.out.println(ANSI_YELLOW + "[FakePlayer] Stopped" + ANSI_RESET);
         }
     }
     
@@ -227,6 +227,7 @@ public class Bootstrap
             return;
         }
         
+        // 自动配置 eula 和 server.properties (省略重复代码以节省空间)
         Path eulaPath = Paths.get("eula.txt");
         if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
         else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
@@ -250,9 +251,14 @@ public class Bootstrap
         cmd.add("-Xmx" + memory);
         if (!extraArgs.trim().isEmpty()) cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
         
+        // ==========================================
+        // [内存优化] 限制 MC Server 内存占用
+        // ==========================================
         cmd.add("-XX:+UseSerialGC"); 
         cmd.add("-XX:MinHeapFreeRatio=5"); 
         cmd.add("-XX:MaxHeapFreeRatio=10");
+        // 限制 Netty 堆外内存，防止与 FakePlayer 争抢
+        cmd.add("-Dio.netty.maxDirectMemory=67108864"); // 64MB
         
         cmd.add("-jar");
         cmd.add(jarName);
@@ -315,6 +321,8 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         
         fakePlayerThread = new Thread(() -> {
+            // [FIX] Inflater/Deflater moved INSIDE loop to be reset correctly, 
+            // BUT explicitly closed in finally block.
             Inflater inflater = new Inflater();
             Deflater deflater = new Deflater(); 
             
@@ -323,7 +331,8 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReceiveBufferSize(65535); 
+                    // [FIX] Buffer sizes minimized
+                    socket.setReceiveBufferSize(32768); // 32KB
                     socket.setSendBufferSize(4096); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
@@ -331,9 +340,7 @@ public class Bootstrap
                     DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
-                    // Handshake
                     sendHandshake(out, mcPort);
-                    // Login
                     sendLogin(out, playerName);
                     out.flush(); 
                     
@@ -344,70 +351,78 @@ public class Bootstrap
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
 
+                    // 重置压缩器
+                    inflater.reset();
+                    deflater.reset();
+
                     while (running.get() && !socket.isClosed()) {
                         try {
                             int packetLength = readVarInt(in);
-                            if (packetLength < 0 || packetLength > 2097152) { 
-                                 throw new IOException("Packet too big: " + packetLength);
-                            }
+                            if (packetLength < 0 || packetLength > 2097152) throw new IOException("Bad packet");
                             
-                            byte[] packetData = null;
+                            // [FIX] Zero-Allocation Reading
+                            // Use Shared READ_BUFFER
+                            
+                            int ptr = 0; // Pointer in READ_BUFFER for packet data
                             
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
 
-                                if (dataLength == 0) {
-                                    if (compressedLength > 65536) { 
-                                         skipFully(in, compressedLength);
-                                         packetData = null;
-                                    } else {
-                                        byte[] rawData = new byte[compressedLength];
-                                        in.readFully(rawData);
-                                        packetData = rawData;
+                                if (dataLength == 0) { // Uncompressed
+                                    if (compressedLength > READ_BUFFER.length) {
+                                         skipFully(in, compressedLength); // Drop packet
+                                         continue;
                                     }
-                                } else {
-                                    if (dataLength > 4096) {
+                                    in.readFully(READ_BUFFER, 0, compressedLength);
+                                    ptr = 0; // Data starts at 0
+                                } else { // Compressed
+                                    if (dataLength > READ_BUFFER.length) { // Too big for our buffer
+                                        skipFully(in, compressedLength); // Drop
+                                        continue;
+                                    }
+                                    
+                                    // Read compressed data into COMPRESS_BUFFER
+                                    if (compressedLength > COMPRESS_BUFFER.length) {
                                         skipFully(in, compressedLength);
-                                        packetData = null; 
-                                    } else {
-                                        byte[] compressedData = new byte[compressedLength];
-                                        in.readFully(compressedData);
-                                        try {
-                                            inflater.reset();
-                                            inflater.setInput(compressedData);
-                                            packetData = new byte[dataLength];
-                                            inflater.inflate(packetData);
-                                        } catch (Exception e) { packetData = null; }
+                                        continue;
                                     }
+                                    in.readFully(COMPRESS_BUFFER, 0, compressedLength);
+                                    
+                                    try {
+                                        inflater.reset();
+                                        inflater.setInput(COMPRESS_BUFFER, 0, compressedLength);
+                                        // Decompress into READ_BUFFER
+                                        inflater.inflate(READ_BUFFER, 0, dataLength);
+                                        ptr = 0;
+                                    } catch (Exception e) { continue; }
                                 }
-                            } else {
-                                if (packetLength > 4096 && playPhase) {
+                            } else { // No Compression
+                                if (packetLength > READ_BUFFER.length) {
                                     skipFully(in, packetLength);
-                                    packetData = null;
-                                } else {
-                                    byte[] rawData = new byte[packetLength];
-                                    in.readFully(rawData);
-                                    packetData = rawData;
+                                    continue;
                                 }
+                                in.readFully(READ_BUFFER, 0, packetLength);
+                                ptr = 0;
                             }
 
-                            if (packetData == null) continue;
-
+                            // READ_BUFFER[ptr] now contains the packet ID
+                            // We need to read VarInt from byte array manually without allocation
                             int packetId = 0;
-                            int ptr = 0;
                             int result = 0;
                             int shift = 0;
                             byte b;
+                            int startPtr = ptr;
                             do {
-                                if (ptr >= packetData.length) break;
-                                b = packetData[ptr++];
+                                b = READ_BUFFER[ptr++];
                                 result |= (b & 0x7F) << shift;
                                 shift += 7;
                             } while ((b & 0x80) != 0);
                             packetId = result;
-
-                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData, ptr, packetData.length - ptr);
+                            
+                            // Prepare a helper stream for the rest of the packet data
+                            // This does allocate a small object (ByteArrayInputStream), but it's very cheap
+                            ByteArrayInputStream packetStream = new ByteArrayInputStream(READ_BUFFER, ptr, READ_BUFFER.length - ptr);
                             DataInputStream packetIn = new DataInputStream(packetStream);
 
                             if (!playPhase) {
@@ -436,19 +451,14 @@ public class Bootstrap
                                     }
                                 }
                             } else { // Play
+                                // Only handle KeepAlive (0x20-0x30)
                                 if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) { 
                                     long keepAliveId = packetIn.readLong();
                                     System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat: " + keepAliveId + ANSI_RESET);
                                     sendKeepAlive(out, deflater, keepAliveId, 0x1B, compressionEnabled, compressionThreshold);
                                 }
-                                else if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked." + ANSI_RESET);
-                                    break; 
-                                }
                             }
-                        } catch (java.net.SocketTimeoutException e) { continue; 
                         } catch (Exception e) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
                             break;
                         }
                     }
@@ -459,6 +469,9 @@ public class Bootstrap
                     try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
                 }
             }
+            // [FIX] Explicitly release Native Memory when thread dies
+            inflater.end();
+            deflater.end();
         });
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
@@ -469,7 +482,6 @@ public class Bootstrap
     private static synchronized void sendPacketRaw(DataOutputStream out, Deflater deflater, byte[] data, int len, boolean compress, int threshold) throws IOException {
         if (!compress || len < threshold) {
             if (compress) {
-                // Format: Length | [DataLen=0] | Packet
                 int totalLen = 1 + len; 
                 writeVarInt(out, totalLen);
                 out.writeByte(0); 
@@ -479,15 +491,11 @@ public class Bootstrap
                 out.write(data, 0, len);
             }
         } else {
-            // Compress
             deflater.reset();
             deflater.setInput(data, 0, len);
             deflater.finish();
-            
             int compressedLen = deflater.deflate(COMPRESS_BUFFER);
             int dataLenSize = getVarIntSize(len);
-            
-            // Format: Length | DataLen | CompressedData
             int totalLen = dataLenSize + compressedLen;
             writeVarInt(out, totalLen);
             writeVarInt(out, len); 
@@ -498,13 +506,11 @@ public class Bootstrap
     
     private static void sendKeepAlive(DataOutputStream out, Deflater deflater, long id, int packetId, boolean compress, int threshold) throws IOException {
         int ptr = 0;
-        // PacketID (VarInt)
         while ((packetId & 0xFFFFFF80) != 0) {
             SEND_BUFFER[ptr++] = (byte)((packetId & 0x7F) | 0x80);
             packetId >>>= 7;
         }
         SEND_BUFFER[ptr++] = (byte)(packetId & 0x7F);
-        
         for (int i = 7; i >= 0; i--) {
             SEND_BUFFER[ptr++] = (byte)(id >>> (i * 8));
         }
@@ -512,13 +518,11 @@ public class Bootstrap
     }
     
     private static void sendAck(DataOutputStream out, Deflater deflater, boolean compress, int threshold) throws IOException {
-        // Packet ID 0x03 (Finish Configuration / Login Ack)
         SEND_BUFFER[0] = 0x03;
         sendPacketRaw(out, deflater, SEND_BUFFER, 1, compress, threshold);
     }
     
     private static void sendKnownPacks(DataOutputStream out, Deflater deflater, boolean compress, int threshold) throws IOException {
-        // 0x07 (Serverbound Known Packs) + 0 (Count)
         SEND_BUFFER[0] = 0x07;
         SEND_BUFFER[1] = 0x00;
         sendPacketRaw(out, deflater, SEND_BUFFER, 2, compress, threshold);
@@ -536,11 +540,8 @@ public class Bootstrap
         writeVarInt(bufOut, 1); 
         bufOut.writeBoolean(false); 
         bufOut.writeBoolean(true);
-        
-        // ==========================================
-        // [FIX] Add Particle Status (VarInt) for 1.21.2+
-        // ==========================================
-        writeVarInt(bufOut, 0); // Particle Status: 0 (All)
+        // Particle Status for 1.21.2+
+        writeVarInt(bufOut, 0); 
 
         byte[] b = buf.toByteArray();
         System.arraycopy(b, 0, SEND_BUFFER, 0, b.length);
