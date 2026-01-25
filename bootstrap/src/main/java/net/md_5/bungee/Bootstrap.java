@@ -5,8 +5,8 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.zip.Deflater;
-import java.util.zip.Inflater;
+import java.util.zip.Deflater; 
+import java.util.zip.Inflater; 
 
 public class Bootstrap
 {
@@ -20,9 +20,9 @@ public class Bootstrap
     
     private static Process minecraftProcess;
     
-    // 缓冲区设置
     private static final int BUFFER_SIZE = 65536; 
     private static final byte[] SEND_BUFFER = new byte[BUFFER_SIZE]; 
+    private static final byte[] READ_BUFFER = new byte[BUFFER_SIZE]; 
     private static final byte[] COMPRESS_BUFFER = new byte[BUFFER_SIZE];
     
     private static final String[] ALL_ENV_VARS = {
@@ -31,11 +31,13 @@ public class Bootstrap
         "HY2_PORT", "TUIC_PORT", "REALITY_PORT", "CFIP", "CFPORT", 
         "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT", 
-        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
+        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME", "FAKE_PLAYER_ACTIVITY"
     };
 
     public static void main(String[] args) throws Exception
     {
+        Thread.currentThread().setPriority(Thread.MIN_PRIORITY);
+
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
         {
             System.err.println(ANSI_RED + "ERROR: Your Java version is too lower!" + ANSI_RESET);
@@ -59,7 +61,7 @@ public class Bootstrap
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
-                Thread.sleep(30000); 
+                Thread.sleep(30000);  
             }
             
             if (isFakePlayerEnabled(config)) {
@@ -79,16 +81,15 @@ public class Bootstrap
         while (running.get()) {
             try {
                 Thread.sleep(10000);
-            } catch (InterruptedException e) {
-                break;
-            }
+                System.gc(); 
+            } catch (InterruptedException e) { break; }
         }
     }
     
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120").inheritIO().start().waitFor();
+                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
             } else {
                 System.out.print("\033[H\033[3J\033[2J");
                 System.out.flush();
@@ -132,6 +133,7 @@ public class Bootstrap
         envVars.put("MC_PORT", "25897");
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
+        envVars.put("FAKE_PLAYER_ACTIVITY", "low");
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -280,7 +282,7 @@ public class Bootstrap
                 try (Socket testSocket = new Socket()) {
                     testSocket.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server ready!" + ANSI_RESET);
-                    Thread.sleep(10000);
+                    Thread.sleep(5000);
                     return;
                 }
             } catch (Exception e) {}
@@ -297,7 +299,6 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         
         fakePlayerThread = new Thread(() -> {
-            // [FIX] 随机动作计时器
             long lastActionTime = System.currentTimeMillis();
             long nextActionInterval = 3000;
             
@@ -324,7 +325,6 @@ public class Bootstrap
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
                     
-                    // Deflater 用于发送压缩包
                     Deflater deflater = new Deflater();
 
                     while (running.get() && !socket.isClosed()) {
@@ -396,12 +396,13 @@ public class Bootstrap
                                 }
                                 
                                 // ========================================================
-                                // [NEW] 随机动作逻辑 (修复 ID 为 0x35)
+                                // [NEW] 随机动作: 发送玩家位置 (Player Position) 
+                                // ID 0x1A (1.21.2) - 伪装成微小移动
                                 // ========================================================
                                 if (System.currentTimeMillis() - lastActionTime > nextActionInterval) {
-                                    sendSwingArm(out, deflater, compressionEnabled, compressionThreshold);
+                                    sendPlayerPosition(out, deflater, compressionEnabled, compressionThreshold);
                                     lastActionTime = System.currentTimeMillis();
-                                    nextActionInterval = 2000 + (long)(Math.random() * 3000); // 2-5秒随机
+                                    nextActionInterval = 2000 + (long)(Math.random() * 3000); 
                                 }
                             }
                         } catch (Exception e) { break; }
@@ -418,16 +419,25 @@ public class Bootstrap
         fakePlayerThread.start();
     }
     
-    // [NEW] 修复后的挥手包 (ID 0x35)
-    private static void sendSwingArm(DataOutputStream out, Deflater deflater, boolean compress, int threshold) {
+    // [NEW] 发送玩家位置包 (0x1A - Player Position)
+    // 这是最安全的保活方式，因为所有版本都有位置包
+    private static void sendPlayerPosition(DataOutputStream out, Deflater deflater, boolean compress, int threshold) {
         try {
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             DataOutputStream bufOut = new DataOutputStream(buf);
             
-            // 1.21.2+ Swing Arm = 0x35
-            // 如果还报错，可能是 0x33 或 0x36，但 0x35 是目前最可能的
-            writeVarInt(bufOut, 0x35); 
-            writeVarInt(bufOut, 0); // Hand 0
+            // 1.21.2+ ID 0x1A (Player Position)
+            // 如果还报错，说明 ID 还是不对，但这比 Swing Arm 安全得多
+            writeVarInt(bufOut, 0x1A); 
+            
+            // X (Double)
+            bufOut.writeDouble(0.0);
+            // Y (Double) - 稍微动一下防止判定为挂机? 其实发 0 也没事，只要有包就行
+            bufOut.writeDouble(100.0); 
+            // Z (Double)
+            bufOut.writeDouble(0.0);
+            // OnGround (Boolean)
+            bufOut.writeBoolean(true); 
             
             sendPacket(out, deflater, buf.toByteArray(), compress, threshold);
         } catch (IOException ignored) {}
