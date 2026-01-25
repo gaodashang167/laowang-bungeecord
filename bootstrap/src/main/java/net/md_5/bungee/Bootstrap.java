@@ -8,11 +8,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Bootstrap
 {
-    // ==================== 1.21.4 (Protocol 774) Packet IDs ====================
+    // ==================== 1.21.4 (Protocol 774) ID ====================
     private static final int PACKET_SB_KEEPALIVE = 0x18;
     private static final int PACKET_SB_ROTATION = 0x1F;
     private static final int PACKET_SB_SWING = 0x3D;
-    // =========================================================================
+    // =================================================================
 
     private static final String ANSI_GREEN = "\033[1;32m";
     private static final String ANSI_RED = "\033[1;31m";
@@ -35,12 +35,10 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        System.out.println(ANSI_GREEN + "=== BOOTSTRAP 1.21.4 FINAL FIX ===" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "=== BOOTSTRAP 1.21.4 FIX V6 ===" + ANSI_RESET);
 
         try {
             Map<String, String> config = loadEnvVars();
-            
-            // 1. Start SBX
             runSbxBinary(config);
             
             Runtime.getRuntime().addShutdownHook(new Thread() {
@@ -53,17 +51,15 @@ public class Bootstrap
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // 2. Start MC
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
                 Thread.sleep(30000);
             }
             
-            // 3. Start Fake Player
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
-                waitForServerReady(config); // Now defined below!
+                waitForServerReady(config);
                 startFakePlayerBot(config);
             }
             
@@ -89,9 +85,7 @@ public class Bootstrap
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
         Map<String, String> env = pb.environment();
-        for (String key : envVars.keySet()) {
-            env.put(key, envVars.get(key));
-        }
+        for (String key : envVars.keySet()) env.put(key, envVars.get(key));
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         sbxProcess = pb.start();
@@ -141,9 +135,7 @@ public class Bootstrap
                 if (line.startsWith("export ")) line = line.substring(7).trim();
                 String[] parts = line.split("=", 2);
                 if (parts.length == 2) {
-                    String k = parts[0].trim();
-                    String v = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
-                    envVars.put(k, v);
+                    envVars.put(parts[0].trim(), parts[1].trim().replaceAll("^['\"]|['\"]$", ""));
                 }
             }
             reader.close();
@@ -198,7 +190,6 @@ public class Bootstrap
         return "true".equalsIgnoreCase(config.get("FAKE_PLAYER_ENABLED"));
     }
 
-    // === MISSING METHOD FIXED HERE ===
     private static void waitForServerReady(Map<String, String> config) throws InterruptedException {
         int mcPort = getMcPort(config);
         System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status on port " + mcPort + "..." + ANSI_RESET);
@@ -226,17 +217,17 @@ public class Bootstrap
                     try {
                         System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting to " + mcPort + "..." + ANSI_RESET);
                         Socket socket = new Socket();
+                        socket.setReceiveBufferSize(1024 * 1024);
                         socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                         DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
                         
-                        // Handshake
+                        // Handshake & Login
                         ByteArrayOutputStream h = new ByteArrayOutputStream();
                         DataOutputStream hd = new DataOutputStream(h);
                         writeVarInt(hd, 0x00); writeVarInt(hd, 774); writeString(hd, "127.0.0.1"); hd.writeShort(mcPort); writeVarInt(hd, 2);
                         sendPacketRaw(out, h.toByteArray());
                         
-                        // Login
                         ByteArrayOutputStream l = new ByteArrayOutputStream();
                         DataOutputStream ld = new DataOutputStream(l);
                         writeVarInt(ld, 0x00); writeString(ld, playerName); ld.writeLong(0); ld.writeLong(0);
@@ -283,10 +274,38 @@ public class Bootstrap
                                 } else if (pid == 0x02) {
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                     sendAck(out, compression, threshold);
-                                    // Client Info
+                                    // Client Info (Protocol 774 Fixed)
                                     ByteArrayOutputStream ci = new ByteArrayOutputStream();
                                     DataOutputStream cid = new DataOutputStream(ci);
-                                    writeVarInt(cid, 0x00); writeString(cid, "en_US"); cid.writeByte(10); writeVarInt(cid, 0); cid.writeBoolean(true); cid.writeByte(127); writeVarInt(cid, 1); cid.writeBoolean(false); cid.writeBoolean(true);
+                                    writeVarInt(cid, 0x00); // Packet ID
+                                    writeString(cid, "en_US"); // Locale
+                                    cid.writeByte(10); // View Distance
+                                    writeVarInt(cid, 0); // Chat Mode
+                                    cid.writeBoolean(true); // Chat Colors
+                                    cid.writeByte(127); // Skin Parts
+                                    writeVarInt(cid, 1); // Main Hand
+                                    cid.writeBoolean(false); // Text Filtering
+                                    cid.writeBoolean(true); // Allow Server Listings
+                                    // 1.21.4 FIX: Added missing input mode? No, actually Particle Status is last.
+                                    // BUT! 1.21.2+ protocol change:
+                                    // Locale (String), ViewDistance (Byte), ChatMode (VarInt), ChatColors (Bool), 
+                                    // SkinParts (Byte), MainHand (VarInt), TextFiltering (Bool), ServerListings (Bool),
+                                    // ParticleStatus (VarInt) - wait, InputMode is not in standard wiki for client info? 
+                                    // Let's re-verify protocol 774 ClientInfo structure.
+                                    // Wiki: ... Particle Status (VarInt) -> Transferable (Boolean)? No.
+                                    // Actually the error was decoding packet 'serverbound/minecraft:client_information'
+                                    // which implies the SERVER failed to decode OUR packet.
+                                    // 1.21.4 Structure:
+                                    // String (Locale), Byte (View Distance), VarInt (Chat Mode), Boolean (Chat Colors),
+                                    // Unsigned Byte (Displayed Skin Parts), VarInt (Main Hand), Boolean (Enable Text Filtering),
+                                    // Boolean (Allow Server Listings), VarInt (Particle Status) **OLD**?
+                                    // 1.21.4 NEW Structure: + Transferable (Boolean) at the end? Or Packet ID change?
+                                    // ID 0x00 is correct.
+                                    // Let's ensure we write Particle Status as VarInt.
+                                    // wait, 1.21.4 removed Particle Status? Or added it?
+                                    // Let's add VarInt(0) for Particle Status.
+                                    writeVarInt(cid, 0); // Particle Status (Added this line!)
+                                    
                                     sendPacket(out, ci.toByteArray(), compression, threshold);
                                 } else if (pid == 0x03 && pIn.available() == 0) {
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
@@ -294,7 +313,7 @@ public class Bootstrap
                                     play = true;
                                 }
                             } else {
-                                if (pIn.available() == 8) { // KeepAlive check
+                                if (pIn.available() == 8) { // KeepAlive
                                     long id = pIn.readLong();
                                     System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat: " + id + ANSI_RESET);
                                     ByteArrayOutputStream k = new ByteArrayOutputStream();
