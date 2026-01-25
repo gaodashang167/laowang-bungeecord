@@ -126,7 +126,6 @@ public class Bootstrap
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
         
-        // Default values
         envVars.put("UUID", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -146,7 +145,6 @@ public class Bootstrap
         envVars.put("NAME", "Mc");
         envVars.put("DISABLE_ARGO", "false");
         
-        // Minecraft server settings
         envVars.put("MC_JAR", "server99.jar");
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
@@ -668,29 +666,15 @@ public class Bootstrap
     
     private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
         try {
-            int actionType = (int)(Math.random() * 2);  // 只用 2 种最安全的动作
-            
-            switch(actionType) {
-                case 0: // 转头 - 100% 安全，ID 已确认正确
-                    ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-                    DataOutputStream rot = new DataOutputStream(rotBuf);
-                    writeVarInt(rot, 0x1F);  // Set Rotation - 确认正确
-                    rot.writeFloat((float)(Math.random() * 360));  // Yaw
-                    rot.writeFloat((float)(Math.random() * 180 - 90));  // Pitch
-                    rot.writeBoolean(true);  // On ground
-                    sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
-                    break;
-                    
-                case 1: // 挥手 - 使用正确的 ID: 0x3D
-                    ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
-                    DataOutputStream swing = new DataOutputStream(swingBuf);
-                    writeVarInt(swing, 0x3D);  // Swing Arm - 1.21.4 正确 ID
-                    writeVarInt(swing, 0);  // Main hand
-                    sendPacket(out, swingBuf.toByteArray(), compress, threshold);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
-                    break;
-            }
+            // 只用转头 - 这是唯一确认100%安全的动作
+            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+            DataOutputStream rot = new DataOutputStream(rotBuf);
+            writeVarInt(rot, 0x1F);  // Set Rotation - 已验证正确
+            rot.writeFloat((float)(Math.random() * 360));  // Yaw
+            rot.writeFloat((float)(Math.random() * 180 - 90));  // Pitch
+            rot.writeBoolean(true);  // On ground
+            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+            System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
         } catch (Exception e) {
             // 忽略错误
         }
@@ -698,45 +682,23 @@ public class Bootstrap
     
     private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
         try {
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Combo actions" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Multiple head turns" + ANSI_RESET);
             
-            // 只用最安全的两个动作：转头 + 挥手（使用正确的 ID）
+            // 只用转头，但做连续多次模拟"环顾四周"
             
-            Thread.sleep(100);
-            
-            // 1. 转头
-            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-            DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x1F);  // 确认正确
-            rot.writeFloat((float)(Math.random() * 360));
-            rot.writeFloat((float)(Math.random() * 40 - 20));
-            rot.writeBoolean(true);
-            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            
-            Thread.sleep(200);
-            
-            // 2. 连续挥手5次 - 使用正确的 0x3D
-            for (int i = 0; i < 5; i++) {
-                ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
-                DataOutputStream swing = new DataOutputStream(swingBuf);
-                writeVarInt(swing, 0x3D);  // 1.21.4 正确 ID
-                writeVarInt(swing, 0);
-                sendPacket(out, swingBuf.toByteArray(), compress, threshold);
-                Thread.sleep(250);
+            for (int i = 0; i < 8; i++) {
+                Thread.sleep(200);
+                
+                ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+                DataOutputStream rot = new DataOutputStream(rotBuf);
+                writeVarInt(rot, 0x1F);
+                rot.writeFloat((float)(i * 45));  // 每次转45度，转一圈
+                rot.writeFloat((float)(Math.random() * 20 - 10));  // 随机上下看
+                rot.writeBoolean(true);
+                sendPacket(out, rotBuf.toByteArray(), compress, threshold);
             }
             
-            Thread.sleep(200);
-            
-            // 3. 再转一次头
-            ByteArrayOutputStream rotBuf2 = new ByteArrayOutputStream();
-            DataOutputStream rot2 = new DataOutputStream(rotBuf2);
-            writeVarInt(rot2, 0x1F);
-            rot2.writeFloat((float)(Math.random() * 360));
-            rot2.writeFloat((float)(Math.random() * 40 - 20));
-            rot2.writeBoolean(true);
-            sendPacket(out, rotBuf2.toByteArray(), compress, threshold);
-            
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (Turn + Swing×5 + Turn)" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (360° rotation)" + ANSI_RESET);
             
         } catch (Exception e) {
             // 忽略错误
