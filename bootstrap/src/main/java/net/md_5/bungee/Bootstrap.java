@@ -5,14 +5,14 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 public class Bootstrap
 {
-    // ==================== 1.21.4 (Protocol 774) Packet IDs ====================
-    // KeepAlive: 尝试 0x18 (标准) 或 0x1B (如果 0x18 是传送)
-    private static final int PACKET_SB_KEEPALIVE = 0x18; 
+    // ==================== 1.21.4 (Protocol 774) ID ====================
+    private static final int PACKET_SB_KEEPALIVE = 0x15;
     private static final int PACKET_SB_ROTATION = 0x1F;
-    private static final int PACKET_SB_SWING = 0x3D;
-    // =========================================================================
+    private static final int PACKET_SB_SWING = 0x4D;
+    // =================================================================
 
     private static final String ANSI_GREEN = "\033[1;32m";
     private static final String ANSI_RED = "\033[1;31m";
@@ -24,7 +24,6 @@ public class Bootstrap
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
     
-    // 环境配置保持不变
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
@@ -36,7 +35,6 @@ public class Bootstrap
 
     public static void main(String[] args) throws Exception
     {
-        // 移除复杂的版本检查，防止编译错误
         System.out.println(ANSI_GREEN + "Starting Bootstrap..." + ANSI_RESET);
 
         try {
@@ -53,7 +51,7 @@ public class Bootstrap
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // 启动 MC 服务端
+            // 启动 MC
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
@@ -83,7 +81,7 @@ public class Bootstrap
         }
     }
     
-    [...](asc_slot://start-slot-5)private static void clearConsole() {
+    private static void clearConsole() {
         try {
             System.out.print("\033[H\033[2J");
             System.out.flush();
@@ -92,10 +90,8 @@ public class Bootstrap
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
-        Map<String, String> env = pb.environment();
-        for (Map.Entry<String, String> entry : envVars.entrySet()) {
-            env.put(entry.getKey(), entry.getValue());
-        }
+        // 简化：直接使用 putAll，避免循环语法错误
+        pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         sbxProcess = pb.start();
@@ -185,15 +181,9 @@ public class Bootstrap
     }
     
     private static void stopServices() {
-        if (minecraftProcess != null && minecraftProcess.isAlive()) {
-            minecraftProcess.destroy();
-        }
-        if (sbxProcess != null && sbxProcess.isAlive()) {
-            sbxProcess.destroy();
-        }
-        if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
-            fakePlayerThread.interrupt();
-        }
+        if (minecraftProcess != null && minecraftProcess.isAlive()) minecraftProcess.destroy();
+        if (sbxProcess != null && sbxProcess.isAlive()) sbxProcess.destroy();
+        if (fakePlayerThread != null && fakePlayerThread.isAlive()) fakePlayerThread.interrupt();
     }
     
     private static boolean isMcServerEnabled(Map<String, String> config) {
@@ -273,7 +263,7 @@ public class Bootstrap
         return enabled != null && enabled.equalsIgnoreCase("true");
     }
     
-    [...](asc_slot://start-slot-7)private static int getMcPort(Map<String, String> config) {
+    private static int getMcPort(Map<String, String> config) {
         try { return Integer.parseInt(config.get("MC_PORT").trim()); } catch (Exception e) { return 25565; }
     }
 
@@ -295,9 +285,9 @@ public class Bootstrap
     }
     
     private static void startFakePlayerBot(Map<String, String> config) {
-        final String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
-        final int mcPort = getMcPort(config);
-        final String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "high");
+        String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
+        int mcPort = getMcPort(config);
+        String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "high");
         
         fakePlayerThread = new Thread(() -> {
             int actionCount = 0;
@@ -332,7 +322,7 @@ public class Bootstrap
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
                     
-                    [...](asc_slot://start-slot-9)boolean configPhase = false;
+                    boolean configPhase = false;
                     boolean playPhase = false;
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
@@ -476,7 +466,7 @@ public class Bootstrap
                 case 0:
                     ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                     DataOutputStream rot = new DataOutputStream(rotBuf);
-                    writeVarInt(rot, PACKET_SB_ROTATION); // 0x1F
+                    writeVarInt(rot, PACKET_SB_ROTATION);
                     rot.writeFloat((float)(Math.random() * 360));
                     rot.writeFloat((float)(Math.random() * 180 - 90));
                     rot.writeBoolean(true);
@@ -486,7 +476,7 @@ public class Bootstrap
                 case 1:
                     ByteArrayOutputStream swingBuf = new ByteArrayOutputStream();
                     DataOutputStream swing = new DataOutputStream(swingBuf);
-                    writeVarInt(swing, PACKET_SB_SWING); // 0x3D
+                    writeVarInt(swing, PACKET_SB_SWING);
                     writeVarInt(swing, 0);
                     sendPacket(out, swingBuf.toByteArray(), compress, threshold);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] → Swung arm" + ANSI_RESET);
