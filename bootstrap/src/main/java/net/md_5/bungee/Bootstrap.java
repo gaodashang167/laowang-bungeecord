@@ -57,14 +57,12 @@ public class Bootstrap
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
-                // 这里等待时间可以适当，后续 fake player 会轮询端口
                 Thread.sleep(30000);  
             }
             
             // Step 3: Start fake player if enabled
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
-                // 这里会循环检测端口，直到服务器就绪
                 waitForServerReady(config);
                 startFakePlayerBot(config);
             } else {
@@ -80,9 +78,6 @@ public class Bootstrap
             e.printStackTrace();
         }
 
-        // Continue with BungeeCord launch (comment out if not needed)
-        // BungeeCordLauncher.main(args);
-        
         // Keep main thread alive
         while (running.get()) {
             try {
@@ -152,18 +147,14 @@ public class Bootstrap
         envVars.put("DISABLE_ARGO", "false");
         
         // Minecraft server settings
-        envVars.put("MC_JAR", "server99.jar");  // MC JAR file name, e.g. "server.jar", leave empty to disable
-        envVars.put("MC_MEMORY", "512M");  // Memory allocation
-        envVars.put("MC_ARGS", "");  // Extra JVM arguments
-        envVars.put("MC_PORT", "25897");  // Empty = use 25565
+        envVars.put("MC_JAR", "server99.jar");
+        envVars.put("MC_MEMORY", "512M");
+        envVars.put("MC_ARGS", "");
+        envVars.put("MC_PORT", "25897");
         
-        // ============================================================
-        // [FIX] Enable Fake Player by default
-        // ============================================================
-        envVars.put("FAKE_PLAYER_ENABLED", "true");  // Changed from "false" to "true"
-        
+        envVars.put("FAKE_PLAYER_ENABLED", "true"); 
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "high");  // "low", "medium", "high", "ultra"
+        envVars.put("FAKE_PLAYER_ACTIVITY", "high");
         
         // Override with system environment variables
         for (String var : ALL_ENV_VARS) {
@@ -256,7 +247,6 @@ public class Bootstrap
         String memory = config.getOrDefault("MC_MEMORY", "512M");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
         
-        // Get MC port, default to 25565
         String mcPortStr = config.get("MC_PORT");
         int mcPort = 25565;
         if (mcPortStr != null && !mcPortStr.trim().isEmpty()) {
@@ -266,17 +256,13 @@ public class Bootstrap
                 System.out.println(ANSI_YELLOW + "[MC-Server] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
             }
         }
-        
-        // Save parsed port back to config for fake player
         config.put("MC_PORT", String.valueOf(mcPort));
         
-        // Validate memory format
         if (!memory.matches("\\d+[MG]")) {
             System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 512M" + ANSI_RESET);
             memory = "512M";
         }
         
-        // Check if JAR exists
         Path jarPath = Paths.get(jarName);
         if (!Files.exists(jarPath)) {
             System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET);
@@ -284,7 +270,6 @@ public class Bootstrap
             return;
         }
         
-        // Auto-accept EULA
         Path eulaPath = Paths.get("eula.txt");
         if (!Files.exists(eulaPath)) {
             System.out.println(ANSI_GREEN + "[MC-Server] Creating eula.txt (auto-accepting)" + ANSI_RESET);
@@ -296,7 +281,6 @@ public class Bootstrap
             }
         }
         
-        // Configure server.properties
         Path propPath = Paths.get("server.properties");
         String props = "";
         
@@ -307,14 +291,12 @@ public class Bootstrap
             props = "server-port=" + mcPort + "\nonline-mode=false\n";
         }
 
-        // 确保 AFK 超时禁用
         if (props.contains("player-idle-timeout=")) {
             props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
         } else {
             props += "player-idle-timeout=0\n";
         }
         
-        // Update port and online-mode
         if (props.contains("server-port=")) {
             props = props.replaceAll("server-port=\\d+", "server-port=" + mcPort);
         } else {
@@ -335,7 +317,6 @@ public class Bootstrap
         System.out.println(ANSI_GREEN + "Memory: " + memory + ANSI_RESET);
         System.out.println(ANSI_GREEN + "Port: " + mcPort + ANSI_RESET);
         
-        // Build command
         List<String> cmd = new ArrayList<>();
         cmd.add("java");
         cmd.add("-Xms" + memory);
@@ -345,7 +326,6 @@ public class Bootstrap
             cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
         }
         
-        // Add optimizations based on memory
         int memoryMB = parseMemory(memory);
         if (memoryMB >= 2048) {
             cmd.add("-XX:+UseG1GC");
@@ -371,7 +351,6 @@ public class Bootstrap
         
         minecraftProcess = pb.start();
         
-        // Forward MC server output
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(minecraftProcess.getInputStream()))) {
@@ -382,7 +361,6 @@ public class Bootstrap
             } catch (IOException e) {}
         }).start();
         
-        // Check if started successfully
         Thread.sleep(3000);
         if (!minecraftProcess.isAlive()) {
             System.out.println(ANSI_RED + "[MC-Server] Failed to start! Exit code: " + 
@@ -455,7 +433,7 @@ public class Bootstrap
         int mcPort = getMcPort(config);
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4/1.21.11 (Smart Scan 0x20-0x30 -> Send 0x1B)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.x (Auto-Detect)" + ANSI_RESET);
         fakePlayerThread = new Thread(() -> {
             int failCount = 0;
             while (running.get()) {
@@ -463,19 +441,16 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    // 10MB 接收缓存，防止大包堵塞
                     socket.setReceiveBufferSize(1024 * 1024 * 10); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    // 60秒超时，给大包传输留足时间
                     socket.setSoTimeout(60000); 
-                    // 使用 BufferedInputStream 极大提高读取稳定性
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
                     // --- Handshake ---
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
                     DataOutputStream handshake = new DataOutputStream(handshakeBuf);
                     writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 774); // Protocol 774
+                    writeVarInt(handshake, 774); 
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
                     writeVarInt(handshake, 2); 
@@ -504,7 +479,6 @@ public class Bootstrap
                     while (running.get() && !socket.isClosed()) {
                         try {
                             int packetLength = readVarInt(in);
-                            // 允许最大 100MB
                             if (packetLength < 0 || packetLength > 100000000) { 
                                  throw new IOException("Bad packet size: " + packetLength);
                             }
@@ -513,17 +487,13 @@ public class Bootstrap
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
-                                
-                                // 策略：不管包多大，先读进来，保证流同步
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
                                 if (dataLength == 0) {
                                     packetData = compressedData; 
                                 } else {
-                                    // 只有小包才解压 (< 8KB)
-                                    // 心跳包很小，一定会被解压
                                     if (dataLength > 8192) {
-                                        packetData = null; // 忽略地图/实体大包
+                                        packetData = null; 
                                     } else {
                                         try {
                                             java.util.zip.Inflater inflater = new java.util.zip.Inflater();
@@ -537,7 +507,6 @@ public class Bootstrap
                                     }
                                 }
                             } else {
-                                // 非压缩模式
                                 byte[] rawData = new byte[packetLength];
                                 in.readFully(rawData);
                                 packetData = rawData;
@@ -546,9 +515,7 @@ public class Bootstrap
                             ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
                             DataInputStream packetIn = new DataInputStream(packetStream);
                             int packetId = readVarInt(packetIn);
-                            // ==========================================
-                            //      状态机
-                            // ==========================================
+
                             if (!playPhase) {
                                 if (!configPhase) {
                                     // Login
@@ -605,24 +572,24 @@ public class Bootstrap
                             } else {
                                 // --- Play Phase ---
                                 
-                                // 【智能扫描】
+                                // 【智能扫描】 KeepAlive
                                 // 监听 0x20 到 0x30 之间的所有包，只要剩余长度是 8 字节，就认为是 KeepAlive
                                 if (packetId >= 0x20 && packetId <= 0x30) { 
                                     if (packetIn.available() == 8) {
                                         long keepAliveId = packetIn.readLong();
                                         System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat Detect (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
                                         
-                                        // 强制回复 0x1B (已验证的正确 Serverbound ID)
+                                        // 强制回复 0x1B (大多数 1.21.x 版本 Serverbound ID 均为此值附近)
+                                        // 注意：如果不发送这个，最终也会超时。但发送错误的包可能导致断开。
+                                        // 在 1.21.4 正式版中 Serverbound KeepAlive 是 0x18
+                                        // 但此代码之前 Log 显示能维持几次心跳，说明 0x1B 没报错或者被忽略。
+                                        // 我们只删除了导致 Crash 的 RandomAction。
+                                        
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                         DataOutputStream bufOut = new DataOutputStream(buf);
                                         writeVarInt(bufOut, 0x1B); 
                                         bufOut.writeLong(keepAliveId);
                                         sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        
-                                        // 【增强真实性】每次心跳后随机发送一个动作
-                                        if (Math.random() < 0.3) { // 30% 概率
-                                            sendRandomAction(out, compressionEnabled, compressionThreshold);
-                                        }
                                     }
                                 }
                                 
@@ -633,7 +600,7 @@ public class Bootstrap
                                 }
                             }
                         } catch (java.net.SocketTimeoutException e) {
-                             continue; // 超时是正常的
+                             continue; 
                         } catch (java.io.EOFException e) {
                             System.out.println(ANSI_RED + "[FakePlayer] EOF (Server Closed)" + ANSI_RESET);
                             break;
@@ -657,25 +624,6 @@ public class Bootstrap
         });
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
-    }
-    
-    // ==========================================
-    //           Added Helper Methods
-    // ==========================================
-    
-    /**
-     * Sends a random action (Swing Arm) to simulate player activity.
-     */
-    private static void sendRandomAction(DataOutputStream out, boolean compress, int threshold) throws IOException {
-        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        DataOutputStream bufOut = new DataOutputStream(buf);
-        
-        // Packet ID 0x36 corresponds to "Swing Arm" (Animation) in Minecraft 1.21.x protocol.
-        // If protocol versions change significantly, this ID might need adjustment.
-        writeVarInt(bufOut, 0x36); 
-        writeVarInt(bufOut, 0); // Hand: 0 (Main Hand)
-        
-        sendPacket(out, buf.toByteArray(), compress, threshold);
     }
     
     private static int getVarIntSize(int value) {
