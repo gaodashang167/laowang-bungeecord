@@ -200,7 +200,7 @@ public class Bootstrap {
     
     private static void startMinecraftServer(Map<String, String> config) throws Exception {
         String jarName = config.get("MC_JAR");
-        String memory = config.getOrDefault("MC_MEMORY", "512M");
+        String memory = config.getOrDefault("MC_MEMORY", "4G");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
         
         String mcPortStr = config.get("MC_PORT");
