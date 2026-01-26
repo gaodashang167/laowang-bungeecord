@@ -216,8 +216,8 @@ public class Bootstrap {
         config.put("MC_PORT", String.valueOf(mcPort));
         
         if (!memory.matches("\\d+[MG]")) {
-            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 512M" + ANSI_RESET);
-            memory = "512M";
+            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 2G" + ANSI_RESET);
+            memory = "2G";
         }
         
         Path jarPath = Paths.get(jarName);
