@@ -118,7 +118,7 @@ public class Bootstrap {
         envVars.put("DISABLE_ARGO", "false");
         
         envVars.put("MC_JAR", "server99.jar");
-        envVars.put("MC_MEMORY", "2G");
+        envVars.put("MC_MEMORY", "4G");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "27722");
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
@@ -216,8 +216,8 @@ public class Bootstrap {
         config.put("MC_PORT", String.valueOf(mcPort));
         
         if (!memory.matches("\\d+[MG]")) {
-            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 2G" + ANSI_RESET);
-            memory = "2G";
+            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 4G" + ANSI_RESET);
+            memory = "4G";
         }
         
         Path jarPath = Paths.get(jarName);
