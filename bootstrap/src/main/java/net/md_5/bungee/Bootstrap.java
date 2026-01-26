@@ -116,7 +116,6 @@ public class Bootstrap {
         envVars.put("CFPORT", "443");
         envVars.put("NAME", "Mc");
         envVars.put("DISABLE_ARGO", "false");
-        
         envVars.put("MC_JAR", "server99.jar");
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
@@ -124,8 +123,6 @@ public class Bootstrap {
         envVars.put("FAKE_PLAYER_ENABLED", "true");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");
-        
-        // 环境变量加载逻辑
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -373,8 +370,6 @@ public class Bootstrap {
         }
     }
 
-    // --- REVISED FAKE PLAYER IMPLEMENTATION ---
-
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
@@ -456,14 +451,15 @@ public class Bootstrap {
                                         ByteArrayOutputStream infoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(infoBuf);
                                         writeVarInt(info, 0x00); // Packet ID 0x00 in Config
-                                        writeString(info, "en_US");
-                                        info.writeByte(10);
-                                        writeVarInt(info, 0);
-                                        info.writeBoolean(true);
-                                        info.writeByte(127);
-                                        writeVarInt(info, 1);
-                                        info.writeBoolean(false);
-                                        info.writeBoolean(true);
+                                        writeString(info, "en_US"); // Locale
+                                        info.writeByte(10); // View Distance
+                                        writeVarInt(info, 0); // Chat Mode
+                                        info.writeBoolean(true); // Chat Colors
+                                        info.writeByte(127); // Skin Parts
+                                        writeVarInt(info, 1); // Main Hand (Right)
+                                        info.writeBoolean(false); // Text Filtering
+                                        info.writeBoolean(true); // Server Listings
+                                        writeVarInt(info, 0); // *** CRITICAL FIX: Particle Status (New in 1.21.2+) ***
                                         sendPacket(out, infoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 } else {
@@ -480,19 +476,13 @@ public class Bootstrap {
                                         writeVarInt(ack, 0x04); // Config Keep Alive Reply
                                         ack.writeLong(id);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    } else if (packetId == 0x0E) { // Registry Data (ignore but reply known packets)
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x07); // Serverbound Known Packs
-                                        writeVarInt(bufOut, 0);    // Count 0
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 }
                             } else {
                                 // --- Play Phase ---
                                 long currentTime = System.currentTimeMillis();
 
-                                // Keep Alive Handling
+                                // Keep Alive Handling (0x26 for 1.21.4, checking 0x2B just in case)
                                 if ((packetId == 0x26 || packetId == 0x2B) && packetIn.available() >= 8) {
                                     long keepAliveId = packetIn.readLong();
                                     
@@ -513,7 +503,7 @@ public class Bootstrap {
                                     }
                                 }
                                 
-                                // Synchronize Player Position (CRITICAL FIX)
+                                // Synchronize Player Position
                                 if (packetId == 0x40) { 
                                     double x = packetIn.readDouble();
                                     double y = packetIn.readDouble();
@@ -546,7 +536,7 @@ public class Bootstrap {
                         } catch (java.net.SocketTimeoutException e) {
                             continue;
                         } catch (Exception e) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getMessage() + ANSI_RESET);
+                            System.out.println(ANSI_RED + "[FakePlayer] Error: " + e + ANSI_RESET);
                             break;
                         }
                     }
