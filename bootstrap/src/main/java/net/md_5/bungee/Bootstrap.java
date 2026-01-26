@@ -18,6 +18,7 @@ public class Bootstrap {
     private static Process minecraftProcess;
     private static Thread fakePlayerThread;
 
+    // --- Environment Variables ---
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
         "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
@@ -71,6 +72,7 @@ public class Bootstrap {
         }
     }
     
+    // --- Utils ---
     private static void clearConsole() {
         try {
             if (System.getProperty("os.name").toLowerCase().contains("windows")) {
@@ -116,7 +118,7 @@ public class Bootstrap {
         envVars.put("MC_PORT", "15017");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "high");        
+        envVars.put("FAKE_PLAYER_ACTIVITY", "high");
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) envVars.put(var, value);
@@ -198,12 +200,11 @@ public class Bootstrap {
         }
     }
 
-    // --- REVISED FAKE PLAYER (PROTOCOL FIX) ---
+    // --- REVISED FAKE PLAYER (WITH DISCONNECT DEBUG) ---
 
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25565"));
-        String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "high");
 
         fakePlayerThread = new Thread(() -> {
             while (running.get()) {
@@ -216,13 +217,13 @@ public class Bootstrap {
                         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                         DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
-                        // Handshake (774 = 1.21.4)
+                        // Handshake
                         sendPacket(out, createHandshakePacket(774, "127.0.0.1", mcPort, 2), -1);
                         sendPacket(out, createLoginStartPacket(playerName), -1);
 
                         boolean configPhase = false;
                         boolean playPhase = false;
-                        int compressionThreshold = -1; // -1 means disabled
+                        int compressionThreshold = -1;
 
                         while (running.get() && !socket.isClosed()) {
                             int len = readVarInt(in);
@@ -234,15 +235,16 @@ public class Bootstrap {
 
                             if (!playPhase) {
                                 if (!configPhase) {
-                                    if (id == 0x03) { // Compression Request
+                                    // LOGIN PHASE
+                                    if (id == 0x03) { // Compression
                                         compressionThreshold = readVarInt(pIn);
                                         System.out.println("[FakePlayer] Compression Set: " + compressionThreshold);
                                     } else if (id == 0x02) { // Login Success
                                         System.out.println(ANSI_GREEN + "[FakePlayer] Login Success" + ANSI_RESET);
-                                        sendPacket(out, createPacket(0x03), compressionThreshold); // Login Ack
+                                        sendPacket(out, createPacket(0x03), compressionThreshold);
                                         configPhase = true;
                                         
-                                        // Send Client Info (Important for 1.21.4)
+                                        // Client Information
                                         ByteArrayOutputStream b = new ByteArrayOutputStream();
                                         DataOutputStream d = new DataOutputStream(b);
                                         writeVarInt(d, 0x00);
@@ -254,11 +256,15 @@ public class Bootstrap {
                                         writeVarInt(d, 1);
                                         d.writeBoolean(false);
                                         d.writeBoolean(true);
-                                        writeVarInt(d, 0); // Particle Status
+                                        writeVarInt(d, 0);
                                         sendPacket(out, b.toByteArray(), compressionThreshold);
+                                    } else if (id == 0x00) { // Login Disconnect
+                                        String reason = readString(pIn);
+                                        System.out.println(ANSI_RED + "[FakePlayer] KICKED (Login): " + reason + ANSI_RESET);
+                                        break;
                                     }
                                 } else {
-                                    // Config Phase
+                                    // CONFIG PHASE
                                     if (id == 0x03) { // Finish Config
                                         System.out.println(ANSI_GREEN + "[FakePlayer] Playing!" + ANSI_RESET);
                                         sendPacket(out, createPacket(0x03), compressionThreshold);
@@ -266,10 +272,10 @@ public class Bootstrap {
                                     } else if (id == 0x0E) { // Known Packs
                                         ByteArrayOutputStream b = new ByteArrayOutputStream();
                                         DataOutputStream d = new DataOutputStream(b);
-                                        writeVarInt(d, 0x07); // Serverbound Known Packs
-                                        writeVarInt(d, 0);    // 0 Packs
+                                        writeVarInt(d, 0x07);
+                                        writeVarInt(d, 0);
                                         sendPacket(out, b.toByteArray(), compressionThreshold);
-                                    } else if (id == 0x04) { // Keep Alive (Config)
+                                    } else if (id == 0x04) { // Keep Alive
                                         long kid = pIn.readLong();
                                         ByteArrayOutputStream b = new ByteArrayOutputStream();
                                         DataOutputStream d = new DataOutputStream(b);
@@ -279,13 +285,17 @@ public class Bootstrap {
                                     } else if (id == 0x09) { // Resource Pack
                                         ByteArrayOutputStream b = new ByteArrayOutputStream();
                                         DataOutputStream d = new DataOutputStream(b);
-                                        writeVarInt(d, 0x06); // RP Response
-                                        writeVarInt(d, 0);    // Accepted
+                                        writeVarInt(d, 0x06); 
+                                        writeVarInt(d, 0);
                                         sendPacket(out, b.toByteArray(), compressionThreshold);
+                                    } else if (id == 0x02) { // Config Disconnect
+                                        String reason = readString(pIn);
+                                        System.out.println(ANSI_RED + "[FakePlayer] KICKED (Config): " + reason + ANSI_RESET);
+                                        break;
                                     }
                                 }
                             } else {
-                                // Play Phase
+                                // PLAY PHASE
                                 if (id == 0x26 || id == 0x2B) { // Keep Alive
                                     long kid = pIn.readLong();
                                     ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -308,15 +318,20 @@ public class Bootstrap {
                                      
                                      ByteArrayOutputStream b = new ByteArrayOutputStream();
                                      DataOutputStream d = new DataOutputStream(b);
-                                     writeVarInt(d, 0x00); // Confirm
+                                     writeVarInt(d, 0x00);
                                      writeVarInt(d, tId);
                                      sendPacket(out, b.toByteArray(), compressionThreshold);
+                                } else if (id == 0x1D) { // Play Disconnect
+                                    String reason = readString(pIn);
+                                    System.out.println(ANSI_RED + "[FakePlayer] KICKED (Play): " + reason + ANSI_RESET);
+                                    break;
                                 }
                             }
                         }
                     }
                 } catch (Exception e) {
-                    System.out.println(ANSI_RED + "[FakePlayer] Disconnected: " + e.getMessage() + ANSI_RESET);
+                    System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.getClass().getSimpleName() + " - " + e.getMessage() + ANSI_RESET);
+                    if (e.getMessage() == null) e.printStackTrace(); // Print stack trace for null messages
                     try { Thread.sleep(10000); } catch (Exception ex) {}
                 }
             }
@@ -364,23 +379,20 @@ public class Bootstrap {
         return b.toByteArray();
     }
 
-    // *** CRITICAL FIX: PROPER COMPRESSION THRESHOLD LOGIC ***
     private static void sendPacket(DataOutputStream out, byte[] packet, int threshold) throws IOException {
-        if (threshold >= 0) { // Compression Enabled
+        if (threshold >= 0) {
             if (packet.length < threshold) {
-                // UNDER THRESHOLD: PacketLen + 0 + RawData
                 ByteArrayOutputStream b = new ByteArrayOutputStream();
                 DataOutputStream d = new DataOutputStream(b);
-                writeVarInt(d, 0); // Data Length = 0
+                writeVarInt(d, 0);
                 d.write(packet);
                 byte[] finalP = b.toByteArray();
                 writeVarInt(out, finalP.length);
                 out.write(finalP);
             } else {
-                // OVER THRESHOLD: PacketLen + UncompressedLen + CompressedData
                 ByteArrayOutputStream b = new ByteArrayOutputStream();
                 DataOutputStream d = new DataOutputStream(b);
-                writeVarInt(d, packet.length); // Uncompressed Length
+                writeVarInt(d, packet.length);
                 
                 ByteArrayOutputStream cBuf = new ByteArrayOutputStream();
                 java.util.zip.Deflater def = new java.util.zip.Deflater();
@@ -399,7 +411,6 @@ public class Bootstrap {
                 out.write(finalP);
             }
         } else {
-            // Uncompressed Mode
             writeVarInt(out, packet.length);
             out.write(packet);
         }
@@ -411,21 +422,18 @@ public class Bootstrap {
         byte[] data = new byte[len];
         in.readFully(data);
         
-        if (threshold < 0) return data; // Not compressing
+        if (threshold < 0) return data;
         
-        // Handle Compressed Packet Reading
         ByteArrayInputStream b = new ByteArrayInputStream(data);
         DataInputStream d = new DataInputStream(b);
-        int dLen = readVarInt(d); // Uncompressed Size
+        int dLen = readVarInt(d);
         
         if (dLen == 0) {
-             // It was sent uncompressed (size < threshold)
              byte[] rem = new byte[b.available()];
              d.readFully(rem);
              return rem;
         }
         
-        // It is compressed
         byte[] compressed = new byte[b.available()];
         d.readFully(compressed);
         java.util.zip.Inflater inf = new java.util.zip.Inflater();
@@ -440,6 +448,13 @@ public class Bootstrap {
         byte[] b = s.getBytes("UTF-8");
         writeVarInt(out, b.length);
         out.write(b);
+    }
+    
+    private static String readString(DataInputStream in) throws IOException {
+        int len = readVarInt(in);
+        byte[] b = new byte[len];
+        in.readFully(b);
+        return new String(b, "UTF-8");
     }
     
     private static void writeVarInt(DataOutputStream out, int v) throws IOException {
