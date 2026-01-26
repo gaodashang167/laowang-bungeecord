@@ -121,7 +121,7 @@ public class Bootstrap {
         envVars.put("MC_MEMORY", "2500M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "27722");
-        envVars.put("FAKE_PLAYER_ENABLED", "true"); 
+        envVars.put("FAKE_PLAYER_ENABLED", "false"); //false或true
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
