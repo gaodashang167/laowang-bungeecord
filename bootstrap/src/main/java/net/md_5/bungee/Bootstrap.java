@@ -118,7 +118,7 @@ public class Bootstrap {
         envVars.put("DISABLE_ARGO", "false");
         
         envVars.put("MC_JAR", "server99.jar");
-        envVars.put("MC_MEMORY", "4G");
+        envVars.put("MC_MEMORY", "2500M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "27722");
         envVars.put("FAKE_PLAYER_ENABLED", "true"); 
@@ -200,7 +200,7 @@ public class Bootstrap {
     
     private static void startMinecraftServer(Map<String, String> config) throws Exception {
         String jarName = config.get("MC_JAR");
-        String memory = config.getOrDefault("MC_MEMORY", "4G");
+        String memory = config.getOrDefault("MC_MEMORY", "2500M");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
         
         String mcPortStr = config.get("MC_PORT");
@@ -216,8 +216,8 @@ public class Bootstrap {
         config.put("MC_PORT", String.valueOf(mcPort));
         
         if (!memory.matches("\\d+[MG]")) {
-            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 4G" + ANSI_RESET);
-            memory = "4G";
+            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 2500M" + ANSI_RESET);
+            memory = "2500M";
         }
         
         Path jarPath = Paths.get(jarName);
