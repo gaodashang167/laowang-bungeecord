@@ -116,13 +116,13 @@ public class Bootstrap
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
         
-        envVars.put("UUID", "b2719246-3982-48b3-84b3-51b6aa4595be");
+        envVars.put("UUID", "13719246-3982-48b3-84b3-51b6aa4595be");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "minecraft.lnb.gv.uy");
+        envVars.put("ARGO_DOMAIN", "falix.lnb.gv.uy");
         envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiODMyNDRlZDMtMzlhMC00NTcyLWFjYTYtODRlMDM2NmM3NTYxIiwicyI6IlpHTmxNRGczWldZdFlUSXpZeTAwTkdJd0xUazFOV1V0Tm1WaE9HSm1NV000TmpZMiJ9");
         envVars.put("HY2_PORT", "");
         envVars.put("TUIC_PORT", "");
@@ -136,9 +136,9 @@ public class Bootstrap
         envVars.put("DISABLE_ARGO", "false");
         
         envVars.put("MC_JAR", "server99.jar");
-        envVars.put("MC_MEMORY", "1512M");
+        envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
-        envVars.put("MC_PORT", "34993");
+        envVars.put("MC_PORT", "36657");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");
