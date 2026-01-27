@@ -146,7 +146,7 @@ public class Bootstrap
         envVars.put("DISABLE_ARGO", "false");
         
         envVars.put("MC_JAR", "server99.jar");
-        envVars.put("MC_MEMORY", "2512M");
+        envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "25389");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
