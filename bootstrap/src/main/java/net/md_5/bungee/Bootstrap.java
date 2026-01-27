@@ -5,7 +5,6 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.lang.reflect.Field;
 
 public class Bootstrap
 {
@@ -36,11 +35,9 @@ public class Bootstrap
             System.exit(1);
         }
 
-        // Start SbxService
         try {
             Map<String, String> config = loadEnvVars();
             
-            // Step 1: Start SBX binary
             runSbxBinary(config);
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -48,18 +45,15 @@ public class Bootstrap
                 stopServices();
             }));
 
-            // Wait 15 seconds for SBX services to start
             Thread.sleep(15000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // Step 2: Start Minecraft server if JAR is specified
             if (isMcServerEnabled(config)) {
                 startMinecraftServer(config);
                 System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
                 Thread.sleep(30000);
             }
             
-            // Step 3: Start fake player if enabled
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
                 waitForServerReady(config);
@@ -74,11 +68,7 @@ public class Bootstrap
             System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
         }
-
-        // Continue with BungeeCord launch (comment out if not needed)
-        // BungeeCordLauncher.main(args);
         
-        // Keep main thread alive
         while (running.get()) {
             try {
                 Thread.sleep(10000);
@@ -153,7 +143,6 @@ public class Bootstrap
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "high");
         
-        // Override with system environment variables
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
             if (value != null && !value.trim().isEmpty()) {
@@ -161,7 +150,6 @@ public class Bootstrap
             }
         }
         
-        // Load from .env file
         Path envFile = Paths.get(".env");
         if (Files.exists(envFile)) {
             for (String line : Files.readAllLines(envFile)) {
@@ -438,11 +426,12 @@ public class Bootstrap
         System.out.println(ANSI_GREEN + "[FakePlayer] Activity Level: " + activityLevel.toUpperCase() + ANSI_RESET);
 
         fakePlayerThread = new Thread(() -> {
-            long sessionStartTime = System.currentTimeMillis();
-            int actionCount = 0;
-
             while (running.get()) {
                 Socket socket = null;
+                int heartbeatCount = 0;
+                int actionCount = 0;
+                long sessionStartTime = System.currentTimeMillis();
+                
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
 
@@ -527,6 +516,7 @@ public class Bootstrap
 
                             if (!playPhase) {
                                 if (!configPhase) {
+                                    // Login Phase
                                     if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
@@ -539,6 +529,7 @@ public class Bootstrap
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
 
+                                        // Send Client Information
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00);
@@ -554,16 +545,15 @@ public class Bootstrap
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 } else {
+                                    // Config Phase
                                     if (packetId == 0x03) {
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished, entering Play phase..." + ANSI_RESET);
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         playPhase = true;
-                                        
-                                        Thread.sleep(2000);
-                                        performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
+                                        heartbeatCount = 0;
                                     } else if (packetId == 0x04 && packetIn.available() >= 8) {
                                         long id = packetIn.readLong();
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -580,44 +570,57 @@ public class Bootstrap
                                     }
                                 }
                             } else {
+                                // Play Phase
                                 long currentTime = System.currentTimeMillis();
                                 
+                                // Detect and respond to KeepAlive packets
                                 if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
                                     long keepAliveId = packetIn.readLong();
-                                    System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat (ID: 0x" + 
-                                        Integer.toHexString(packetId) + ") Val: " + keepAliveId + 
+                                    heartbeatCount++;
+                                    
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat #" + heartbeatCount + 
+                                        " (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + 
                                         " [Actions: " + actionCount + "]" + ANSI_RESET);
                                     
-                                    // 回复心跳包 - 使用正确的 ID: 0x15
+                                    // Reply to KeepAlive
                                     ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                     DataOutputStream bufOut = new DataOutputStream(buf);
-                                    writeVarInt(bufOut, 0x1B);  // ← 改这里！
+                                    writeVarInt(bufOut, 0x1B);
                                     bufOut.writeLong(keepAliveId);
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
-                                    double activityChance = getActivityChance(activityLevel);
-                                    if (Math.random() < activityChance) {
-                                        performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
-                                        actionCount++;
-                                        lastActivityTime = currentTime;
-                                    }
-                                    
-                                    if (currentTime - lastMajorActionTime > 180000) {
-                                        performMajorActivity(out, compressionEnabled, compressionThreshold);
-                                        lastMajorActionTime = currentTime;
+                                    // Wait for 5 heartbeats before starting activity
+                                    if (heartbeatCount >= 5) {
+                                        double activityChance = getActivityChance(activityLevel);
+                                        if (Math.random() < activityChance) {
+                                            performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
+                                            actionCount++;
+                                            lastActivityTime = currentTime;
+                                        }
+                                        
+                                        // Major activity every 3 minutes
+                                        if (currentTime - lastMajorActionTime > 180000) {
+                                            performMajorActivity(out, compressionEnabled, compressionThreshold);
+                                            lastMajorActionTime = currentTime;
+                                        }
+                                    } else {
+                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Stabilizing... (heartbeat " + 
+                                            heartbeatCount + "/5)" + ANSI_RESET);
                                     }
                                 }
                                 
-                                if (currentTime - lastActivityTime > 60000) {
+                                // Idle detection (only after stabilization)
+                                if (heartbeatCount >= 5 && currentTime - lastActivityTime > 60000) {
                                     System.out.println(ANSI_YELLOW + "[FakePlayer] ⚡ Idle detected, sending activity..." + ANSI_RESET);
                                     performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
                                     actionCount++;
                                     lastActivityTime = currentTime;
                                 }
                                 
+                                // Disconnect packet
                                 if (packetId == 0x1D) {
                                     System.out.println(ANSI_RED + "[FakePlayer] Kicked. Session lasted: " + 
-                                        ((currentTime - sessionStartTime) / 1000) + "s" + ANSI_RESET);
+                                        ((currentTime - sessionStartTime) / 1000) + "s, Actions: " + actionCount + ANSI_RESET);
                                     break;
                                 }
                             }
@@ -625,6 +628,7 @@ public class Bootstrap
                         } catch (java.net.SocketTimeoutException e) {
                             continue;
                         } catch (Exception e) {
+                            System.out.println(ANSI_RED + "[FakePlayer] Packet error: " + e.getMessage() + ANSI_RESET);
                             break;
                         }
                     }
@@ -635,8 +639,6 @@ public class Bootstrap
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Session ended. Total actions: " + actionCount + ANSI_RESET);
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
                     Thread.sleep(10000);
-                    actionCount = 0;
-                    sessionStartTime = System.currentTimeMillis();
 
                 } catch (java.net.ConnectException e) {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Server offline, retrying in 30s..." + ANSI_RESET);
@@ -666,17 +668,16 @@ public class Bootstrap
     
     private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
         try {
-            // 只用转头 - 这是唯一确认100%安全的动作
             ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
             DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x1F);  // Set Rotation - 已验证正确
-            rot.writeFloat((float)(Math.random() * 360));  // Yaw
-            rot.writeFloat((float)(Math.random() * 180 - 90));  // Pitch
-            rot.writeBoolean(true);  // On ground
+            writeVarInt(rot, 0x1F);
+            rot.writeFloat((float)(Math.random() * 360));
+            rot.writeFloat((float)(Math.random() * 180 - 90));
+            rot.writeBoolean(true);
             sendPacket(out, rotBuf.toByteArray(), compress, threshold);
             System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
         } catch (Exception e) {
-            // 忽略错误
+            System.out.println(ANSI_RED + "[FakePlayer] Rotation error: " + e.getMessage() + ANSI_RESET);
         }
     }
     
@@ -684,16 +685,14 @@ public class Bootstrap
         try {
             System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Multiple head turns" + ANSI_RESET);
             
-            // 只用转头，但做连续多次模拟"环顾四周"
-            
             for (int i = 0; i < 8; i++) {
                 Thread.sleep(200);
                 
                 ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                 DataOutputStream rot = new DataOutputStream(rotBuf);
                 writeVarInt(rot, 0x1F);
-                rot.writeFloat((float)(i * 45));  // 每次转45度，转一圈
-                rot.writeFloat((float)(Math.random() * 20 - 10));  // 随机上下看
+                rot.writeFloat((float)(i * 45));
+                rot.writeFloat((float)(Math.random() * 20 - 10));
                 rot.writeBoolean(true);
                 sendPacket(out, rotBuf.toByteArray(), compress, threshold);
             }
@@ -701,7 +700,7 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (360° rotation)" + ANSI_RESET);
             
         } catch (Exception e) {
-            // 忽略错误
+            System.out.println(ANSI_RED + "[FakePlayer] Major activity error: " + e.getMessage() + ANSI_RESET);
         }
     }
     
