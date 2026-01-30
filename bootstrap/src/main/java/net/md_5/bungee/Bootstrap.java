@@ -71,7 +71,7 @@ public class Bootstrap
         
         while (running.get()) {
             try {
-                Thread.sleep(10000);
+                Thread.sleep(30000); // 增加到30秒，减少主循环检查频率
             } catch (InterruptedException e) {
                 break;
             }
@@ -141,7 +141,7 @@ public class Bootstrap
         envVars.put("MC_PORT", "19187");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("FAKE_PLAYER_ACTIVITY", "low");
+        envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 默认改为low，更稳定
         
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
@@ -418,7 +418,7 @@ public class Bootstrap
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
-        String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "high");
+        String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "low");
 
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
@@ -438,7 +438,7 @@ public class Bootstrap
                     socket = new Socket();
                     socket.setReceiveBufferSize(10 * 1024 * 1024);
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(60000);
+                    socket.setSoTimeout(5000); // 设置5秒超时，防止无限等待
 
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                     DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
@@ -481,6 +481,12 @@ public class Bootstrap
 
                     while (running.get() && !socket.isClosed()) {
                         try {
+                            // 关键优化：检查是否有可用数据
+                            if (in.available() == 0) {
+                                Thread.sleep(100); // 没有数据时休眠100ms，避免CPU空转
+                                continue;
+                            }
+                            
                             int packetLength = readVarInt(in);
                             if (packetLength < 0 || packetLength > 100000000) {
                                 throw new IOException("Bad packet size");
@@ -589,32 +595,19 @@ public class Bootstrap
                                     bufOut.writeLong(keepAliveId);
                                     sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     
-                                    // Wait for 5 heartbeats before starting activity
-                                    if (heartbeatCount >= 5) {
-                                        double activityChance = getActivityChance(activityLevel);
-                                        if (Math.random() < activityChance) {
-                                            performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
-                                            actionCount++;
-                                            lastActivityTime = currentTime;
-                                        }
-                                        
-                                        // Major activity every 3 minutes
-                                        if (currentTime - lastMajorActionTime > 180000) {
+                                    // 等待10个心跳后再开始活动，确保稳定
+                                    if (heartbeatCount >= 10) {
+                                        // 5分钟执行一次主要活动 (300秒)
+                                        if (currentTime - lastMajorActionTime > 300000) {
                                             performMajorActivity(out, compressionEnabled, compressionThreshold);
+                                            actionCount++;
                                             lastMajorActionTime = currentTime;
+                                            lastActivityTime = currentTime;
                                         }
                                     } else {
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Stabilizing... (heartbeat " + 
-                                            heartbeatCount + "/5)" + ANSI_RESET);
+                                            heartbeatCount + "/10)" + ANSI_RESET);
                                     }
-                                }
-                                
-                                // Idle detection (only after stabilization)
-                                if (heartbeatCount >= 5 && currentTime - lastActivityTime > 60000) {
-                                    System.out.println(ANSI_YELLOW + "[FakePlayer] ⚡ Idle detected, sending activity..." + ANSI_RESET);
-                                    performRandomAction(out, compressionEnabled, compressionThreshold, activityLevel);
-                                    actionCount++;
-                                    lastActivityTime = currentTime;
                                 }
                                 
                                 // Disconnect packet
@@ -626,6 +619,8 @@ public class Bootstrap
                             }
 
                         } catch (java.net.SocketTimeoutException e) {
+                            // 超时是正常的，添加短暂休眠避免CPU空转
+                            Thread.sleep(100);
                             continue;
                         } catch (Exception e) {
                             System.out.println(ANSI_RED + "[FakePlayer] Packet error: " + e.getMessage() + ANSI_RESET);
@@ -637,17 +632,17 @@ public class Bootstrap
                         try { socket.close(); } catch (Exception e) {}
                     }
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Session ended. Total actions: " + actionCount + ANSI_RESET);
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
-                    Thread.sleep(10000);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 30s..." + ANSI_RESET);
+                    Thread.sleep(30000); // 增加重连间隔到30秒
 
                 } catch (java.net.ConnectException e) {
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Server offline, retrying in 30s..." + ANSI_RESET);
-                    try { Thread.sleep(30000); } catch (InterruptedException ex) { break; }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Server offline, retrying in 60s..." + ANSI_RESET);
+                    try { Thread.sleep(60000); } catch (InterruptedException ex) { break; }
                 } catch (InterruptedException e) {
                     break;
                 } catch (Exception e) {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connection error: " + e.getMessage() + ANSI_RESET);
-                    try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
+                    try { Thread.sleep(30000); } catch (InterruptedException ex) { break; }
                 }
             }
         });
@@ -656,51 +651,27 @@ public class Bootstrap
         fakePlayerThread.start();
     }
     
-    private static double getActivityChance(String level) {
-        switch(level.toLowerCase()) {
-            case "low": return 0.2;
-            case "medium": return 0.4;
-            case "high": return 0.6;
-            case "ultra": return 0.8;
-            default: return 0.6;
-        }
-    }
-    
-    private static void performRandomAction(DataOutputStream out, boolean compress, int threshold, String level) {
-        try {
-            ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-            DataOutputStream rot = new DataOutputStream(rotBuf);
-            writeVarInt(rot, 0x1F);
-            rot.writeFloat((float)(Math.random() * 360));
-            rot.writeFloat((float)(Math.random() * 180 - 90));
-            rot.writeBoolean(true);
-            sendPacket(out, rotBuf.toByteArray(), compress, threshold);
-            System.out.println(ANSI_YELLOW + "[FakePlayer] → Turned head" + ANSI_RESET);
-        } catch (Exception e) {
-            System.out.println(ANSI_RED + "[FakePlayer] Rotation error: " + e.getMessage() + ANSI_RESET);
-        }
-    }
-    
     private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
         try {
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: Multiple head turns" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: 360° rotation (slow & smooth)" + ANSI_RESET);
             
-            for (int i = 0; i < 8; i++) {
-                Thread.sleep(200);
+            // 慢速平滑旋转，减少服务器负载
+            for (int i = 0; i < 12; i++) {
+                Thread.sleep(500); // 每次旋转间隔500ms
                 
                 ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
                 DataOutputStream rot = new DataOutputStream(rotBuf);
                 writeVarInt(rot, 0x1F);
-                rot.writeFloat((float)(i * 45));
-                rot.writeFloat((float)(Math.random() * 20 - 10));
+                rot.writeFloat((float)(i * 30)); // 每次旋转30度
+                rot.writeFloat((float)(Math.sin(i * 0.5) * 10)); // 轻微上下移动
                 rot.writeBoolean(true);
                 sendPacket(out, rotBuf.toByteArray(), compress, threshold);
             }
             
-            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Major activity completed (360° rotation)" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Activity completed (360° smooth rotation)" + ANSI_RESET);
             
         } catch (Exception e) {
-            System.out.println(ANSI_RED + "[FakePlayer] Major activity error: " + e.getMessage() + ANSI_RESET);
+            System.out.println(ANSI_RED + "[FakePlayer] Activity error: " + e.getMessage() + ANSI_RESET);
         }
     }
     
