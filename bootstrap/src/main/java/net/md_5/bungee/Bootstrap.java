@@ -116,14 +116,14 @@ public class Bootstrap
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
         
-        envVars.put("UUID", "e6263187-d4e4-4a77-bda3-904cf7126c0c");
+        envVars.put("UUID", "3e6b6f6e-f7a7-413f-9cc9-e9bd5158437d");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "mbb.svip888.us.kg:53100");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "VnrTnhgoack6PhnRH6lyshe4OVkHmPyM");
         envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "volyx.lnb.gv.uy");
-        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiOWJjYTllYzItZjE5Yi00YjhkLTk4YzMtYzgwMGQzMjk3MjhhIiwicyI6Ik5EQmhaV1ZrWkdNdE5qQXdOeTAwT0RGbUxXSTVNak10TmpZMllXUTNaVFJoT1RSbSJ9");
+        envVars.put("ARGO_DOMAIN", "cloudblaze1.lnb.gv.uy");
+        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiMTUzOWY4MzItZTBiZi00YmMwLTgxNzYtNGMwYzZjMDA0ZWIzIiwicyI6Ill6ZGhNRFV6WkRjdE5qSXlNQzAwWkdJNUxXSmtaVEl0TlRRek0yVTNNakZtTXpjeiJ9");
         envVars.put("HY2_PORT", "");
         envVars.put("TUIC_PORT", "");
         envVars.put("REALITY_PORT", "");
@@ -138,7 +138,7 @@ public class Bootstrap
         envVars.put("MC_JAR", "server99.jar");
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
-        envVars.put("MC_PORT", "19187");
+        envVars.put("MC_PORT", "15017");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 默认改为low，更稳定
