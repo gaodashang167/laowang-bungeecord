@@ -139,7 +139,7 @@ public class Bootstrap
         envVars.put("MC_MEMORY", "512M");
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "");
-        envVars.put("FAKE_PLAYER_ENABLED", "true");
+        envVars.put("FAKE_PLAYER_ENABLED", "false");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
         envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 默认改为low，更稳定
         
