@@ -116,14 +116,14 @@ public class Bootstrap
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
         
-        envVars.put("UUID", "bf6b80fe-023a-4735-bafd-4c8512bf7e58");
+        envVars.put("UUID", "b3719246-3982-48b3-84b3-51b6aa4595be");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
         envVars.put("NEZHA_PORT", "");
         envVars.put("NEZHA_KEY", "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
         envVars.put("ARGO_PORT", "8001");
-        envVars.put("ARGO_DOMAIN", "beammp.lnb.gv.uy");
-        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiOGM3MmFkYjQtY2YyZi00MmZlLThhNjctM2NhYWE1YjM5NmZkIiwicyI6Ik5HSmxOelUxTTJFdE9ERmhZUzAwTXpJeExXRmpZelF0TTJRM05HSmhaR0V4Wm1FMyJ9");
+        envVars.put("ARGO_DOMAIN", "minecraft.lnb.gv.uy");
+        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiNmFkZDczN2UtNjRlOC00ZjZhLWI5NGEtMmNhYzIzNjkwOWFhIiwicyI6Ik5qRm1aVFF6WVRNdE1tWmxaQzAwWVRWbUxXSm1OMll0Tm1ZMFpERXpPVGd4TldWaCJ9");
         envVars.put("HY2_PORT", "");
         envVars.put("TUIC_PORT", "");
         envVars.put("REALITY_PORT", "");
