@@ -140,7 +140,7 @@ public class Bootstrap
         envVars.put("MC_ARGS", "");
         envVars.put("MC_PORT", "");
         envVars.put("FAKE_PLAYER_ENABLED", "true");
-        envVars.put("FAKE_PLAYER_NAME", "laohu");
+        envVars.put("FAKE_PLAYER_NAME", "tuijl178");
         envVars.put("FAKE_PLAYER_ACTIVITY", "low"); // 默认改为low，更稳定
         
         for (String var : ALL_ENV_VARS) {
