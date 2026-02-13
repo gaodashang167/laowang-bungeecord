@@ -526,11 +526,14 @@ public class Bootstrap
                 boolean compressionEnabled = false;
                 int compressionThreshold = -1;
                 
-                // 玩家位置追踪
-                double playerX = 0.0;
-                double playerY = 64.0;
-                double playerZ = 0.0;
-                boolean positionReceived = false;
+                // 玩家位置追踪 - 使用初始坐标，不等待服务器同步
+                double playerX = -200.0 + (random.nextDouble() * 40 - 20); // -220 到 -180 随机
+                double playerY = 70.0 + random.nextInt(20); // 70-90 随机高度
+                double playerZ = -100.0 + (random.nextDouble() * 40 - 20); // -120 到 -80 随机
+                boolean positionReceived = true; // 直接标记为true，不等待同步
+                
+                System.out.println(ANSI_YELLOW + "[FakePlayer-" + playerName + "] Initial position: " +
+                    String.format("(%.1f, %.1f, %.1f)", playerX, playerY, playerZ) + ANSI_RESET);
                 
                 long lastActivityTime = System.currentTimeMillis();
                 long lastMajorActionTime = System.currentTimeMillis();
@@ -634,15 +637,18 @@ public class Bootstrap
                             // Play Phase
                             long currentTime = System.currentTimeMillis();
                             
-                            // 接收同步位置包 (Synchronize Player Position - 0x3E or nearby)
-                            if ((packetId == 0x3E || packetId == 0x3D || packetId == 0x40) && packetIn.available() >= 24) {
+                            // 尝试接收位置包更新（可选，不影响活动）
+                            if ((packetId == 0x3E || packetId == 0x3D || packetId == 0x40 || packetId == 0x3C) && packetIn.available() >= 24) {
                                 try {
-                                    playerX = packetIn.readDouble();
-                                    playerY = packetIn.readDouble();
-                                    playerZ = packetIn.readDouble();
-                                    positionReceived = true;
-                                    if (heartbeatCount == 12) { // 只在第一次打印
-                                        System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ✓ Position sync: " +
+                                    double newX = packetIn.readDouble();
+                                    double newY = packetIn.readDouble();
+                                    double newZ = packetIn.readDouble();
+                                    // 更新位置
+                                    playerX = newX;
+                                    playerY = newY;
+                                    playerZ = newZ;
+                                    if (heartbeatCount == 12) {
+                                        System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ✓ Position updated: " +
                                             String.format("(%.1f, %.1f, %.1f)", playerX, playerY, playerZ) + ANSI_RESET);
                                     }
                                 } catch (Exception e) {
@@ -668,7 +674,7 @@ public class Bootstrap
                                 sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                 
                                 // 偶尔发送微小的视角抖动（模拟真人细微移动）
-                                if (heartbeatCount >= 10 && positionReceived && random.nextInt(10) == 0) {
+                                if (heartbeatCount >= 10 && random.nextInt(10) == 0) {
                                     ByteArrayOutputStream microBuf = new ByteArrayOutputStream();
                                     DataOutputStream micro = new DataOutputStream(microBuf);
                                     writeVarInt(micro, 0x1F);
@@ -679,13 +685,13 @@ public class Bootstrap
                                     sendPacket(out, microBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                                 
-                                // 等待10个心跳后，每个假人在不同时间执行活动（基于playerIndex错开）
-                                if (heartbeatCount >= 10 && positionReceived) {
-                                    // 随机间隔2-4分钟，增加不可预测性
-                                    long baseInterval = 120000; // 2分钟基础
-                                    long randomExtra = random.nextInt(120000); // 0-2分钟随机
+                                // 等待10个心跳后开始活动（不再等待位置同步）
+                                if (heartbeatCount >= 10) {
+                                    // 缩短间隔到30秒-1.5分钟，更频繁的活动
+                                    long baseInterval = 30000; // 30秒基础
+                                    long randomExtra = random.nextInt(60000); // 0-60秒随机
                                     long activityInterval = baseInterval + randomExtra;
-                                    long playerOffset = playerIndex * 30000L; // 30秒偏移
+                                    long playerOffset = playerIndex * 10000L; // 10秒偏移（更密集）
                                     
                                     if (currentTime - lastMajorActionTime - playerOffset > activityInterval) {
                                         performMajorActivity(out, compressionEnabled, compressionThreshold, playerName, playerIndex, 
