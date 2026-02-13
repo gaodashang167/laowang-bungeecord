@@ -16,6 +16,7 @@ public class Bootstrap
     private static Process sbxProcess;
     private static Process minecraftProcess;
     private static List<Thread> fakePlayerThreads = new ArrayList<>();
+    private static final Random random = new Random();
     
     private static final String[] ALL_ENV_VARS = {
         "PORT", "FILE_PATH", "UUID", "NEZHA_SERVER", "NEZHA_PORT", 
@@ -525,6 +526,12 @@ public class Bootstrap
                 boolean compressionEnabled = false;
                 int compressionThreshold = -1;
                 
+                // 玩家位置追踪
+                double playerX = 0.0;
+                double playerY = 64.0;
+                double playerZ = 0.0;
+                boolean positionReceived = false;
+                
                 long lastActivityTime = System.currentTimeMillis();
                 long lastMajorActionTime = System.currentTimeMillis();
 
@@ -627,6 +634,22 @@ public class Bootstrap
                             // Play Phase
                             long currentTime = System.currentTimeMillis();
                             
+                            // 接收同步位置包 (Synchronize Player Position - 0x3E or nearby)
+                            if ((packetId == 0x3E || packetId == 0x3D || packetId == 0x40) && packetIn.available() >= 24) {
+                                try {
+                                    playerX = packetIn.readDouble();
+                                    playerY = packetIn.readDouble();
+                                    playerZ = packetIn.readDouble();
+                                    positionReceived = true;
+                                    if (heartbeatCount == 12) { // 只在第一次打印
+                                        System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ✓ Position sync: " +
+                                            String.format("(%.1f, %.1f, %.1f)", playerX, playerY, playerZ) + ANSI_RESET);
+                                    }
+                                } catch (Exception e) {
+                                    // 忽略位置读取错误
+                                }
+                            }
+                            
                             // Detect and respond to KeepAlive packets
                             if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
                                 long keepAliveId = packetIn.readLong();
@@ -644,14 +667,29 @@ public class Bootstrap
                                 bufOut.writeLong(keepAliveId);
                                 sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                 
+                                // 偶尔发送微小的视角抖动（模拟真人细微移动）
+                                if (heartbeatCount >= 10 && positionReceived && random.nextInt(10) == 0) {
+                                    ByteArrayOutputStream microBuf = new ByteArrayOutputStream();
+                                    DataOutputStream micro = new DataOutputStream(microBuf);
+                                    writeVarInt(micro, 0x1F);
+                                    // 非常微小的随机角度变化
+                                    micro.writeFloat((float)(random.nextGaussian() * 0.5));
+                                    micro.writeFloat((float)(random.nextGaussian() * 0.3));
+                                    micro.writeBoolean(true);
+                                    sendPacket(out, microBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                }
+                                
                                 // 等待10个心跳后，每个假人在不同时间执行活动（基于playerIndex错开）
-                                if (heartbeatCount >= 10) {
-                                    // 每5分钟执行一次活动，每个假人错开30秒
-                                    long activityInterval = 300000; // 5分钟
+                                if (heartbeatCount >= 10 && positionReceived) {
+                                    // 随机间隔2-4分钟，增加不可预测性
+                                    long baseInterval = 120000; // 2分钟基础
+                                    long randomExtra = random.nextInt(120000); // 0-2分钟随机
+                                    long activityInterval = baseInterval + randomExtra;
                                     long playerOffset = playerIndex * 30000L; // 30秒偏移
                                     
                                     if (currentTime - lastMajorActionTime - playerOffset > activityInterval) {
-                                        performMajorActivity(out, compressionEnabled, compressionThreshold, playerName);
+                                        performMajorActivity(out, compressionEnabled, compressionThreshold, playerName, playerIndex, 
+                                            playerX, playerY, playerZ);
                                         actionCount++;
                                         lastMajorActionTime = currentTime;
                                         lastActivityTime = currentTime;
@@ -695,20 +733,103 @@ public class Bootstrap
         }
     }
     
-    private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold, String playerName) {
+    private static void performMajorActivity(DataOutputStream out, boolean compress, int threshold, 
+                                             String playerName, int playerIndex, double x, double y, double z) {
         try {
-            System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ★ MAJOR ACTIVITY: 360° rotation (slow & smooth)" + ANSI_RESET);
+            // 随机选择活动类型
+            int activityType = random.nextInt(3);
             
-            for (int i = 0; i < 12; i++) {
-                Thread.sleep(500);
+            if (activityType == 0) {
+                // 活动1: 随机走动 + 视角移动
+                System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ★ ACTIVITY: Random walk" + ANSI_RESET);
                 
-                ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
-                DataOutputStream rot = new DataOutputStream(rotBuf);
-                writeVarInt(rot, 0x1F);
-                rot.writeFloat((float)(i * 30));
-                rot.writeFloat((float)(Math.sin(i * 0.5) * 10));
-                rot.writeBoolean(true);
-                sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+                int steps = 3 + random.nextInt(5); // 3-7步
+                for (int i = 0; i < steps; i++) {
+                    Thread.sleep(300 + random.nextInt(400)); // 300-700ms随机间隔
+                    
+                    // 随机移动位置 (-3到+3格)
+                    double newX = x + (random.nextDouble() * 6 - 3);
+                    double newY = y;
+                    double newZ = z + (random.nextDouble() * 6 - 3);
+                    
+                    // 发送位置包 (0x1A - Set Player Position)
+                    ByteArrayOutputStream posBuf = new ByteArrayOutputStream();
+                    DataOutputStream pos = new DataOutputStream(posBuf);
+                    writeVarInt(pos, 0x1A);
+                    pos.writeDouble(newX);
+                    pos.writeDouble(newY);
+                    pos.writeDouble(newZ);
+                    pos.writeBoolean(true); // on ground
+                    sendPacket(out, posBuf.toByteArray(), compress, threshold);
+                    
+                    // 同时随机转动视角
+                    float yaw = random.nextFloat() * 360;
+                    float pitch = (random.nextFloat() * 40) - 20; // -20到+20度
+                    
+                    ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+                    DataOutputStream rot = new DataOutputStream(rotBuf);
+                    writeVarInt(rot, 0x1F);
+                    rot.writeFloat(yaw);
+                    rot.writeFloat(pitch);
+                    rot.writeBoolean(true);
+                    sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+                }
+                
+            } else if (activityType == 1) {
+                // 活动2: 环顾四周（慢速不规则旋转）
+                System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ★ ACTIVITY: Looking around" + ANSI_RESET);
+                
+                int rotations = 8 + random.nextInt(8); // 8-15次旋转
+                for (int i = 0; i < rotations; i++) {
+                    Thread.sleep(400 + random.nextInt(600)); // 400-1000ms随机
+                    
+                    // 不规则旋转角度
+                    float yaw = random.nextFloat() * 360;
+                    float pitch = (random.nextFloat() * 60) - 30; // -30到+30度
+                    
+                    ByteArrayOutputStream rotBuf = new ByteArrayOutputStream();
+                    DataOutputStream rot = new DataOutputStream(rotBuf);
+                    writeVarInt(rot, 0x1F);
+                    rot.writeFloat(yaw);
+                    rot.writeFloat(pitch);
+                    rot.writeBoolean(true);
+                    sendPacket(out, rotBuf.toByteArray(), compress, threshold);
+                }
+                
+            } else {
+                // 活动3: 原地跳跃 + 小范围移动
+                System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ★ ACTIVITY: Jumping around" + ANSI_RESET);
+                
+                int jumps = 2 + random.nextInt(4); // 2-5次跳跃
+                for (int i = 0; i < jumps; i++) {
+                    Thread.sleep(800 + random.nextInt(400)); // 800-1200ms
+                    
+                    // 小范围移动
+                    double newX = x + (random.nextDouble() * 2 - 1); // -1到+1格
+                    double newY = y + 0.5; // 模拟跳跃高度
+                    double newZ = z + (random.nextDouble() * 2 - 1);
+                    
+                    ByteArrayOutputStream posBuf = new ByteArrayOutputStream();
+                    DataOutputStream pos = new DataOutputStream(posBuf);
+                    writeVarInt(pos, 0x1A);
+                    pos.writeDouble(newX);
+                    pos.writeDouble(newY);
+                    pos.writeDouble(newZ);
+                    pos.writeBoolean(false); // in air
+                    sendPacket(out, posBuf.toByteArray(), compress, threshold);
+                    
+                    Thread.sleep(200);
+                    
+                    // 落地
+                    ByteArrayOutputStream landBuf = new ByteArrayOutputStream();
+                    DataOutputStream land = new DataOutputStream(landBuf);
+                    writeVarInt(land, 0x1A);
+                    land.writeDouble(newX);
+                    land.writeDouble(y);
+                    land.writeDouble(newZ);
+                    land.writeBoolean(true); // on ground
+                    sendPacket(out, landBuf.toByteArray(), compress, threshold);
+                }
             }
             
             System.out.println(ANSI_GREEN + "[FakePlayer-" + playerName + "] ★ Activity completed" + ANSI_RESET);
