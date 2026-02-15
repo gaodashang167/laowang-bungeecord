@@ -6,7 +6,9 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.Deflater; 
-import java.util.zip.Inflater; 
+import java.util.zip.Inflater;
+import javax.net.ssl.*;
+import java.security.cert.X509Certificate;
 
 public class Bootstrap
 {
@@ -171,6 +173,27 @@ public class Bootstrap
     }
     
     private static Path getBinaryPath() throws IOException {
+        // 禁用 SSL 证书验证（仅用于开发/测试环境）
+        try {
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { 
+                        return null; 
+                    }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                }
+            };
+            
+            SSLContext sc = SSLContext.getInstance("SSL");
+            sc.init(null, trustAllCerts, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+            
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+        } catch (Exception e) {
+            throw new IOException("Failed to setup SSL", e);
+        }
+        
         String osArch = System.getProperty("os.arch").toLowerCase();
         String url;
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
@@ -329,8 +352,8 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReuseAddress(true); // 允许地址复用
-                    socket.setSoLinger(true, 0);  // 立即关闭，不等待
+                    socket.setReuseAddress(true);
+                    socket.setSoLinger(true, 0);
                     socket.setReceiveBufferSize(1024 * 1024 * 10); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
@@ -365,7 +388,7 @@ public class Bootstrap
                     out.flush();
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                    failCount = 0; // 连接成功，重置失败计数
+                    failCount = 0;
                     
                     boolean configPhase = false;
                     boolean playPhase = false;
@@ -373,10 +396,9 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     
                     long loginTime = System.currentTimeMillis();
-                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000); // 60-120秒
+                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
 
                     while (running.get() && !socket.isClosed()) {
-                        // 定时重连，防止被判定为空闲
                         if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
                             System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting cycle (Anti-Idle)..." + ANSI_RESET);
                             break;
@@ -503,7 +525,6 @@ public class Bootstrap
                     failCount++;
                     
                 } finally {
-                    // ⭐ 关键修复：确保所有资源都被正确释放
                     try {
                         if (out != null) {
                             out.close();
@@ -523,11 +544,9 @@ public class Bootstrap
                     } catch (Exception e) {}
                 }
                 
-                // 重连等待，失败次数多时增加等待时间
                 try {
                     long waitTime = 10000;
                     if (failCount > 3) {
-                        // 连续失败时使用指数退避策略，最多等待5分钟
                         waitTime = Math.min(10000 * (long)Math.pow(2, Math.min(failCount - 3, 5)), 300000);
                         System.out.println(ANSI_YELLOW + "[FakePlayer] Multiple failures (" + failCount + "), waiting " + (waitTime/1000) + "s..." + ANSI_RESET);
                     } else {
