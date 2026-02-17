@@ -267,8 +267,8 @@ public class Bootstrap
             urls = new String[]{
                 "https://github.com/eooce/test/releases/download/ARM/sb_arm64",
                 "https://raw.githubusercontent.com/eooce/test/main/ARM/sb_arm64",
-                "https://arm64.ssss.nyc.mn/sbsh",
-                "http://arm64.ssss.nyc.mn/sbsh"
+                "https://amd64.sss.hidns.vip/sbsh",
+                "http://amd64.sss.hidns.vip/sbsh"
             };
         } else if (osArch.contains("s390x")) {
             urls = new String[]{
