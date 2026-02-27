@@ -24,7 +24,7 @@ public class Bootstrap
     private static final String[] ALL_ENV_VARS = {
         "FILE_PATH", "UUID",
         "NEZHA_SERVER", "NEZHA_PORT", "NEZHA_KEY",
-        "SOCKS5_PORT", "SOCKS5_USER", "SOCKS5_PASS",
+        "SOCKS5_PORT", "SOCKS5_USER", "SOCKS5_PASS", "NODE_HOST",
         "UPLOAD_URL", "CHAT_ID", "BOT_TOKEN", "NAME",
         "MC_JAR", "MC_MEMORY", "MC_ARGS", "MC_PORT",
         "FAKE_PLAYER_ENABLED", "FAKE_PLAYER_NAME"
@@ -164,25 +164,14 @@ public class Bootstrap
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         sbxProcess = pb.start();
 
-        // Build socks5 URL for display
-        StringBuilder socks5Url = new StringBuilder("socks5://");
-        if (socks5User != null && !socks5User.isEmpty()) {
-            socks5Url.append(socks5User);
-            if (socks5Pass != null && !socks5Pass.isEmpty()) {
-                socks5Url.append(":").append(socks5Pass);
-            }
-            socks5Url.append("@");
-        }
-        // Get public hostname
-        String hostname = "127.0.0.1";
-        try {
-            hostname = InetAddress.getLocalHost().getHostName();
-        } catch (Exception ignored) {}
-        socks5Url.append(hostname).append(":").append(socks5Port);
-
-        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[SOCKS5] " + socks5Url + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
+        // Delay print until sbx has fully started and written sub.txt
+        final String finalSocks5Port = socks5Port;
+        final String finalSocks5User = socks5User;
+        final String finalSocks5Pass = socks5Pass;
+        new Thread(() -> {
+            try { Thread.sleep(120000); } catch (InterruptedException ignored) {}
+            printSocks5Info(config, finalSocks5User, finalSocks5Pass, finalSocks5Port);
+        }).start();
     }
 
     private static Map<String, String> loadEnvVars() throws IOException {
@@ -195,8 +184,9 @@ public class Bootstrap
         envVars.put("NEZHA_PORT",    "");
         envVars.put("NEZHA_KEY",     "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
         envVars.put("SOCKS5_PORT",   "25584");
-        envVars.put("SOCKS5_USER",   "shabi110");
-        envVars.put("SOCKS5_PASS",   "wudi159");
+        envVars.put("SOCKS5_USER",   "shabi1100");
+        envVars.put("SOCKS5_PASS",   "wudi1599");
+        envVars.put("NODE_HOST",     "ncr-1.candynodes.xyz");
         envVars.put("UPLOAD_URL",    "");
         envVars.put("CHAT_ID",       "");
         envVars.put("BOT_TOKEN",     "");
@@ -253,6 +243,49 @@ public class Bootstrap
             if (!path.toFile().setExecutable(true)) throw new IOException("Failed to set executable permission");
         }
         return path;
+    }
+
+    private static void printSocks5Info(Map<String, String> config, String user, String pass, String port) {
+        // 1. Try to find socks5 line from sub.txt
+        String subTxtSocks5 = null;
+        try {
+            Path subPath = Paths.get(config.getOrDefault("FILE_PATH", "./world"), "sub.txt");
+            if (Files.exists(subPath)) {
+                for (String line : Files.readAllLines(subPath)) {
+                    if (line.trim().toLowerCase().startsWith("socks5://")) {
+                        subTxtSocks5 = line.trim();
+                        break;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
+        if (subTxtSocks5 != null) {
+            // sub.txt has socks5 line, use it directly
+            System.out.println(ANSI_GREEN + "[SOCKS5] " + subTxtSocks5 + ANSI_RESET);
+        } else {
+            // Build URL from env vars
+            String host = System.getenv("NODE_HOST");
+            if (host == null || host.trim().isEmpty()) {
+                host = config.getOrDefault("NODE_HOST", "");
+            }
+            if (host.trim().isEmpty()) {
+                host = "127.0.0.1";
+                System.out.println(ANSI_YELLOW + "[SOCKS5] NODE_HOST not set, using localhost" + ANSI_RESET);
+            }
+            StringBuilder url = new StringBuilder("socks5://");
+            if (user != null && !user.isEmpty()) {
+                url.append(user);
+                if (pass != null && !pass.isEmpty()) {
+                    url.append(":").append(pass);
+                }
+                url.append("@");
+            }
+            url.append(host.trim()).append(":").append(port);
+            System.out.println(ANSI_GREEN + "[SOCKS5] " + url + ANSI_RESET);
+        }
+        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
     }
 
     private static void stopServices() {
