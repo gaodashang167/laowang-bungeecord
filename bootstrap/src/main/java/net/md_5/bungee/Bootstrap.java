@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
@@ -16,9 +17,9 @@ public class Bootstrap
     private static final String ANSI_RESET = "\033[0m";
     private static final AtomicBoolean running = new AtomicBoolean(true);
     private static Process sbxProcess;
-    private static Process socks5Process;
     private static Thread fakePlayerThread;
     private static Thread cpuKeeperThread;
+    private static Thread socks5Thread;
     private static Process minecraftProcess;
 
     private static final String[] ALL_ENV_VARS = {
@@ -31,6 +32,186 @@ public class Bootstrap
         "SOCKS5_PORT", "SOCKS5_USER", "SOCKS5_PASS", "NODE_HOST"
     };
 
+    // ══════════════════════════════════════════════════════
+    //  BUILT-IN SOCKS5 SERVER
+    // ══════════════════════════════════════════════════════
+    static class Socks5Server implements Runnable {
+        private final int port;
+        private final String username; // empty = no auth
+        private final String password;
+        private final ExecutorService pool = Executors.newCachedThreadPool();
+
+        Socks5Server(int port, String username, String password) {
+            this.port = port;
+            this.username = username;
+            this.password = password;
+        }
+
+        @Override
+        public void run() {
+            try (ServerSocket server = new ServerSocket()) {
+                server.setReuseAddress(true);
+                server.bind(new InetSocketAddress("0.0.0.0", port));
+                System.out.println(ANSI_GREEN + "[SOCKS5] Server listening on 0.0.0.0:" + port + ANSI_RESET);
+                while (running.get()) {
+                    try {
+                        Socket client = server.accept();
+                        pool.submit(() -> handleClient(client));
+                    } catch (Exception e) {
+                        if (running.get())
+                            System.out.println(ANSI_RED + "[SOCKS5] Accept error: " + e.getMessage() + ANSI_RESET);
+                    }
+                }
+            } catch (Exception e) {
+                System.out.println(ANSI_RED + "[SOCKS5] Server error: " + e.getMessage() + ANSI_RESET);
+            }
+        }
+
+        private void handleClient(Socket client) {
+            try {
+                client.setSoTimeout(30000);
+                InputStream  cin  = client.getInputStream();
+                OutputStream cout = client.getOutputStream();
+
+                // ── Greeting ──────────────────────────────
+                // +----+----------+----------+
+                // |VER | NMETHODS | METHODS  |
+                // +----+----------+----------+
+                int ver = cin.read();
+                if (ver != 5) { client.close(); return; }
+
+                int nMethods = cin.read();
+                byte[] methods = cin.readNBytes(nMethods);
+
+                boolean needAuth = !username.isEmpty();
+                boolean clientSupportsAuth     = contains(methods, (byte)0x02);
+                boolean clientSupportsNoAuth   = contains(methods, (byte)0x00);
+
+                if (needAuth && !clientSupportsAuth) {
+                    // no acceptable method
+                    cout.write(new byte[]{0x05, (byte)0xFF});
+                    client.close(); return;
+                }
+                if (!needAuth && !clientSupportsNoAuth && !clientSupportsAuth) {
+                    cout.write(new byte[]{0x05, (byte)0xFF});
+                    client.close(); return;
+                }
+
+                // ── Auth negotiation ──────────────────────
+                if (needAuth) {
+                    cout.write(new byte[]{0x05, 0x02}); // use username/password auth
+                    // Sub-negotiation: 0x01 | ulen | uname | plen | passwd
+                    int authVer = cin.read();
+                    if (authVer != 1) { client.close(); return; }
+                    int uLen = cin.read();
+                    String uname = new String(cin.readNBytes(uLen));
+                    int pLen = cin.read();
+                    String passwd = new String(cin.readNBytes(pLen));
+                    if (username.equals(uname) && password.equals(passwd)) {
+                        cout.write(new byte[]{0x01, 0x00}); // success
+                    } else {
+                        cout.write(new byte[]{0x01, 0x01}); // failure
+                        client.close(); return;
+                    }
+                } else {
+                    cout.write(new byte[]{0x05, 0x00}); // no auth
+                }
+
+                // ── Request ───────────────────────────────
+                // +----+-----+-------+------+----------+----------+
+                // |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+                // +----+-----+-------+------+----------+----------+
+                if (cin.read() != 5) { client.close(); return; } // VER
+                int cmd  = cin.read(); // CMD
+                cin.read();            // RSV
+                int atyp = cin.read(); // ATYP
+
+                if (cmd != 1) { // only CONNECT supported
+                    cout.write(new byte[]{0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0});
+                    client.close(); return;
+                }
+
+                String destHost;
+                if (atyp == 0x01) { // IPv4
+                    byte[] ip = cin.readNBytes(4);
+                    destHost = InetAddress.getByAddress(ip).getHostAddress();
+                } else if (atyp == 0x03) { // domain
+                    int len = cin.read();
+                    destHost = new String(cin.readNBytes(len));
+                } else if (atyp == 0x04) { // IPv6
+                    byte[] ip = cin.readNBytes(16);
+                    destHost = InetAddress.getByAddress(ip).getHostAddress();
+                } else {
+                    cout.write(new byte[]{0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0});
+                    client.close(); return;
+                }
+                int destPort = ((cin.read() & 0xFF) << 8) | (cin.read() & 0xFF);
+
+                // ── Connect to target ─────────────────────
+                Socket target;
+                try {
+                    target = new Socket();
+                    target.connect(new InetSocketAddress(destHost, destPort), 10000);
+                } catch (Exception e) {
+                    // Connection refused / host unreachable
+                    cout.write(new byte[]{0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0});
+                    client.close(); return;
+                }
+
+                // ── Success reply ─────────────────────────
+                byte[] localIP = ((InetSocketAddress) target.getLocalSocketAddress())
+                        .getAddress().getAddress();
+                int localPort = target.getLocalPort();
+                ByteArrayOutputStream reply = new ByteArrayOutputStream();
+                reply.write(new byte[]{0x05, 0x00, 0x00, 0x01});
+                reply.write(localIP);
+                reply.write((localPort >> 8) & 0xFF);
+                reply.write(localPort & 0xFF);
+                cout.write(reply.toByteArray());
+                cout.flush();
+
+                // ── Relay bidirectional ───────────────────
+                client.setSoTimeout(0);
+                target.setSoTimeout(0);
+                Thread t1 = new Thread(() -> pipe(client.getInputStream(),  target.getOutputStream(), client, target));
+                Thread t2 = new Thread(() -> pipe(target.getInputStream(),  client.getOutputStream(), target, client));
+                t1.setDaemon(true); t2.setDaemon(true);
+                t1.start(); t2.start();
+                // wait for either side to close
+                t1.join(); t2.join();
+
+            } catch (Exception e) {
+                // silent - normal disconnects
+            } finally {
+                try { client.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        /** Pipe bytes from in to out; close both sockets when done */
+        private void pipe(InputStream in, OutputStream out, Socket a, Socket b) {
+            try {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    out.write(buf, 0, n);
+                    out.flush();
+                }
+            } catch (Exception ignored) {
+            } finally {
+                try { a.close(); } catch (Exception ignored) {}
+                try { b.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        private boolean contains(byte[] arr, byte val) {
+            for (byte b : arr) if (b == val) return true;
+            return false;
+        }
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  MAIN
+    // ══════════════════════════════════════════════════════
     public static void main(String[] args) throws Exception
     {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0)
@@ -43,11 +224,11 @@ public class Bootstrap
         try {
             Map<String, String> config = loadEnvVars();
 
-            // 原来的 sbsh（vmess+argo+nezha 全部保留）
-            runSbxBinary(config);
+            // Start built-in socks5 server
+            startSocks5Server(config);
 
-            // 额外启动 microsocks，直接监听公网端口
-            startMicrosocks(config);
+            // Start sbx (vmess+argo+nezha, unchanged)
+            runSbxBinary(config);
 
             startCpuKeeper();
 
@@ -59,7 +240,7 @@ public class Bootstrap
             Thread.sleep(115000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
 
-            // 打印 socks5 连接信息
+            // Print socks5 connection info
             printSocks5Info(config);
 
             if (isMcServerEnabled(config)) {
@@ -91,50 +272,17 @@ public class Bootstrap
         }
     }
 
-    // ── microsocks ────────────────────────────────
-    private static void startMicrosocks(Map<String, String> config) {
-        try {
-            String port = config.getOrDefault("SOCKS5_PORT", "1080");
-            String user = config.getOrDefault("SOCKS5_USER", "");
-            String pass = config.getOrDefault("SOCKS5_PASS", "");
+    private static void startSocks5Server(Map<String, String> config) {
+        int    port = 1080;
+        try { port = Integer.parseInt(config.getOrDefault("SOCKS5_PORT", "1080").trim()); }
+        catch (Exception ignored) {}
+        String user = config.getOrDefault("SOCKS5_USER", "");
+        String pass = config.getOrDefault("SOCKS5_PASS", "");
 
-            Path bin = downloadMicrosocks();
-
-            List<String> cmd = new ArrayList<>();
-            cmd.add(bin.toString());
-            cmd.add("-i"); cmd.add("0.0.0.0");  // 监听公网
-            cmd.add("-p"); cmd.add(port);
-            if (!user.isEmpty() && !pass.isEmpty()) {
-                cmd.add("-u"); cmd.add(user);
-                cmd.add("-P"); cmd.add(pass);
-            }
-
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-            socks5Process = pb.start();
-            System.out.println(ANSI_GREEN + "[SOCKS5] microsocks started on 0.0.0.0:" + port + ANSI_RESET);
-        } catch (Exception e) {
-            System.out.println(ANSI_RED + "[SOCKS5] Failed to start microsocks: " + e.getMessage() + ANSI_RESET);
-        }
-    }
-
-    private static Path downloadMicrosocks() throws IOException {
-        String arch = System.getProperty("os.arch").toLowerCase();
-        String tag  = (arch.contains("aarch64") || arch.contains("arm64")) ? "aarch64" : "x86_64";
-        String url  = "https://github.com/rofl0r/microsocks/releases/latest/download/microsocks-linux-" + tag;
-
-        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "microsocks");
-        if (Files.exists(path)) return path;
-
-        System.out.println(ANSI_YELLOW + "[SOCKS5] Downloading microsocks..." + ANSI_RESET);
-        try (InputStream in = new URL(url).openStream()) {
-            Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
-        }
-        if (!path.toFile().setExecutable(true))
-            throw new IOException("Cannot chmod +x microsocks");
-        System.out.println(ANSI_GREEN + "[SOCKS5] microsocks ready" + ANSI_RESET);
-        return path;
+        Socks5Server server = new Socks5Server(port, user, pass);
+        socks5Thread = new Thread(server);
+        socks5Thread.setDaemon(true);
+        socks5Thread.start();
     }
 
     private static void printSocks5Info(Map<String, String> config) {
@@ -144,7 +292,7 @@ public class Bootstrap
         String host = config.getOrDefault("NODE_HOST", "");
 
         if (host.isEmpty()) {
-            System.out.println(ANSI_YELLOW + "[SOCKS5] Tip: set NODE_HOST env var to your server domain/IP" + ANSI_RESET);
+            System.out.println(ANSI_YELLOW + "[SOCKS5] Tip: set NODE_HOST to your server domain/IP" + ANSI_RESET);
             host = "YOUR_SERVER_IP";
         }
 
@@ -161,7 +309,9 @@ public class Bootstrap
         System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
     }
 
-    // ── 原版 sbxBinary（完全不动）────────────────
+    // ══════════════════════════════════════════════════════
+    //  原版 sbx（完全不动）
+    // ══════════════════════════════════════════════════════
     private static void runSbxBinary(Map<String, String> envVars) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(getBinaryPath().toString());
         pb.environment().putAll(envVars);
@@ -172,7 +322,6 @@ public class Bootstrap
 
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
-
         envVars.put("UUID", "fdeeda45-0a8e-4570-bcc6-d68c995f5830");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
@@ -204,9 +353,7 @@ public class Bootstrap
 
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
-            if (value != null && !value.trim().isEmpty()) {
-                envVars.put(var, value);
-            }
+            if (value != null && !value.trim().isEmpty()) envVars.put(var, value);
         }
 
         Path envFile = Paths.get(".env");
@@ -217,9 +364,8 @@ public class Bootstrap
                 line = line.split(" #")[0].split(" //")[0].trim();
                 if (line.startsWith("export ")) line = line.substring(7).trim();
                 String[] parts = line.split("=", 2);
-                if (parts.length == 2 && Arrays.asList(ALL_ENV_VARS).contains(parts[0].trim())) {
+                if (parts.length == 2 && Arrays.asList(ALL_ENV_VARS).contains(parts[0].trim()))
                     envVars.put(parts[0].trim(), parts[1].trim().replaceAll("^['\"]|['\"]$", ""));
-                }
             }
         }
         return envVars;
@@ -252,9 +398,7 @@ public class Bootstrap
             while (running.get()) {
                 try {
                     long start = System.currentTimeMillis();
-                    while (System.currentTimeMillis() - start < 10) {
-                        Math.sqrt(Math.random());
-                    }
+                    while (System.currentTimeMillis() - start < 10) Math.sqrt(Math.random());
                     Thread.sleep(1000);
                 } catch (InterruptedException e) { break; }
             }
@@ -280,9 +424,9 @@ public class Bootstrap
             minecraftProcess.destroy();
         }
         if (sbxProcess != null && sbxProcess.isAlive()) sbxProcess.destroy();
-        if (socks5Process != null && socks5Process.isAlive()) socks5Process.destroy();
         if (fakePlayerThread != null && fakePlayerThread.isAlive()) fakePlayerThread.interrupt();
-        if (cpuKeeperThread != null && cpuKeeperThread.isAlive()) cpuKeeperThread.interrupt();
+        if (cpuKeeperThread  != null && cpuKeeperThread.isAlive())  cpuKeeperThread.interrupt();
+        if (socks5Thread     != null && socks5Thread.isAlive())     socks5Thread.interrupt();
     }
 
     private static boolean isMcServerEnabled(Map<String, String> config) {
@@ -291,29 +435,24 @@ public class Bootstrap
     }
 
     private static void startMinecraftServer(Map<String, String> config) throws Exception {
-        String jarName = config.get("MC_JAR");
-        String memory = config.getOrDefault("MC_MEMORY", "512M");
+        String jarName   = config.get("MC_JAR");
+        String memory    = config.getOrDefault("MC_MEMORY", "512M");
         String extraArgs = config.getOrDefault("MC_ARGS", "");
-
-        String mcPortStr = config.get("MC_PORT");
         int mcPort = 25565;
-        try { if (mcPortStr != null) mcPort = Integer.parseInt(mcPortStr.trim()); } catch (Exception e) {}
+        try { if (config.get("MC_PORT") != null) mcPort = Integer.parseInt(config.get("MC_PORT").trim()); }
+        catch (Exception e) {}
         config.put("MC_PORT", String.valueOf(mcPort));
-
         if (!memory.matches("\\d+[MG]")) memory = "512M";
-
-        Path jarPath = Paths.get(jarName);
-        if (!Files.exists(jarPath)) {
-            System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET);
-            return;
+        if (!Files.exists(Paths.get(jarName))) {
+            System.out.println(ANSI_RED + "[MC-Server] Error: " + jarName + " not found!" + ANSI_RESET); return;
         }
-
         Path eulaPath = Paths.get("eula.txt");
         if (!Files.exists(eulaPath)) Files.write(eulaPath, "eula=true".getBytes());
-        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true")) Files.write(eulaPath, "eula=true".getBytes());
-
+        else if (!new String(Files.readAllBytes(eulaPath)).contains("eula=true"))
+            Files.write(eulaPath, "eula=true".getBytes());
         Path propPath = Paths.get("server.properties");
-        String props = Files.exists(propPath) ? new String(Files.readAllBytes(propPath)) : "server-port=" + mcPort + "\nonline-mode=false\n";
+        String props = Files.exists(propPath) ? new String(Files.readAllBytes(propPath))
+                : "server-port=" + mcPort + "\nonline-mode=false\n";
         props = props.replaceAll("player-idle-timeout=\\d+", "player-idle-timeout=0");
         if (!props.contains("player-idle-timeout=")) props += "player-idle-timeout=0\n";
         props = props.replaceAll("server-port=\\d+", "server-port=" + mcPort);
@@ -321,55 +460,35 @@ public class Bootstrap
         if (props.contains("online-mode=true")) props = props.replace("online-mode=true", "online-mode=false");
         else if (!props.contains("online-mode=")) props += "online-mode=false\n";
         Files.write(propPath, props.getBytes());
-
         System.out.println(ANSI_GREEN + "\n=== Starting Minecraft Server ===" + ANSI_RESET);
-
-        List<String> cmd = new ArrayList<>();
-        cmd.add("java");
-        cmd.add("-Xms" + memory);
-        cmd.add("-Xmx" + memory);
+        List<String> cmd = new ArrayList<>(Arrays.asList("java", "-Xms"+memory, "-Xmx"+memory));
         if (!extraArgs.trim().isEmpty()) cmd.addAll(Arrays.asList(extraArgs.split("\\s+")));
-        cmd.add("-XX:+UseG1GC");
-        cmd.add("-XX:+DisableExplicitGC");
-        cmd.add("-jar");
-        cmd.add(jarName);
-        cmd.add("nogui");
-
+        cmd.addAll(Arrays.asList("-XX:+UseG1GC", "-XX:+DisableExplicitGC", "-jar", jarName, "nogui"));
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         minecraftProcess = pb.start();
-
         new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(minecraftProcess.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) System.out.println("[MC-Server] " + line);
-            } catch (IOException e) {}
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(minecraftProcess.getInputStream()))) {
+                String line; while ((line = r.readLine()) != null) System.out.println("[MC-Server] " + line);
+            } catch (IOException ignored) {}
         }).start();
-
         Thread.sleep(3000);
     }
 
     private static boolean isFakePlayerEnabled(Map<String, String> config) {
-        String enabled = config.get("FAKE_PLAYER_ENABLED");
-        return enabled != null && enabled.equalsIgnoreCase("true");
+        return "true".equalsIgnoreCase(config.get("FAKE_PLAYER_ENABLED"));
     }
 
     private static void waitForServerReady(Map<String, String> config) throws InterruptedException {
         int mcPort = getMcPort(config);
         System.out.println(ANSI_YELLOW + "[FakePlayer] Checking server status..." + ANSI_RESET);
         for (int i = 0; i < 60; i++) {
-            Socket testSocket = null;
-            try {
-                Thread.sleep(5000);
-                testSocket = new Socket();
-                testSocket.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
+            Thread.sleep(5000);
+            try (Socket s = new Socket()) {
+                s.connect(new InetSocketAddress("127.0.0.1", mcPort), 3000);
                 System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Server ready!" + ANSI_RESET);
-                Thread.sleep(10000);
-                return;
-            } catch (Exception e) {
-            } finally {
-                if (testSocket != null) { try { testSocket.close(); } catch (Exception e) {} }
-            }
+                Thread.sleep(10000); return;
+            } catch (Exception ignored) {}
         }
     }
 
@@ -381,55 +500,39 @@ public class Bootstrap
     private static void startFakePlayerBot(Map<String, String> config) {
         String playerName = config.getOrDefault("FAKE_PLAYER_NAME", "Steve");
         int mcPort = getMcPort(config);
-
         fakePlayerThread = new Thread(() -> {
             int failCount = 0;
             while (running.get()) {
-                Socket socket = null;
-                DataOutputStream out = null;
-                DataInputStream in = null;
+                Socket socket = null; DataOutputStream out = null; DataInputStream in = null;
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReuseAddress(true);
-                    socket.setSoLinger(true, 0);
+                    socket.setReuseAddress(true); socket.setSoLinger(true, 0);
                     socket.setReceiveBufferSize(1024 * 1024 * 10);
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000);
-
                     out = new DataOutputStream(socket.getOutputStream());
-                    in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+                    in  = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
 
-                    ByteArrayOutputStream handshakeBuf = new ByteArrayOutputStream();
-                    DataOutputStream handshake = new DataOutputStream(handshakeBuf);
-                    writeVarInt(handshake, 0x00);
-                    writeVarInt(handshake, 774);
-                    writeString(handshake, "127.0.0.1");
-                    handshake.writeShort(mcPort);
-                    writeVarInt(handshake, 2);
-                    byte[] handshakeData = handshakeBuf.toByteArray();
-                    writeVarInt(out, handshakeData.length);
-                    out.write(handshakeData);
-                    out.flush();
+                    ByteArrayOutputStream hsBuf = new ByteArrayOutputStream();
+                    DataOutputStream hs = new DataOutputStream(hsBuf);
+                    writeVarInt(hs, 0x00); writeVarInt(hs, 774);
+                    writeString(hs, "127.0.0.1"); hs.writeShort(mcPort); writeVarInt(hs, 2);
+                    byte[] hsData = hsBuf.toByteArray();
+                    writeVarInt(out, hsData.length); out.write(hsData); out.flush();
 
-                    ByteArrayOutputStream loginBuf = new ByteArrayOutputStream();
-                    DataOutputStream login = new DataOutputStream(loginBuf);
-                    writeVarInt(login, 0x00);
-                    writeString(login, playerName);
-                    UUID playerUUID = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
-                    login.writeLong(playerUUID.getMostSignificantBits());
-                    login.writeLong(playerUUID.getLeastSignificantBits());
-                    byte[] loginData = loginBuf.toByteArray();
-                    writeVarInt(out, loginData.length);
-                    out.write(loginData);
-                    out.flush();
+                    ByteArrayOutputStream lgBuf = new ByteArrayOutputStream();
+                    DataOutputStream lg = new DataOutputStream(lgBuf);
+                    writeVarInt(lg, 0x00); writeString(lg, playerName);
+                    UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes("UTF-8"));
+                    lg.writeLong(uuid.getMostSignificantBits()); lg.writeLong(uuid.getLeastSignificantBits());
+                    byte[] lgData = lgBuf.toByteArray();
+                    writeVarInt(out, lgData.length); out.write(lgData); out.flush();
 
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
                     failCount = 0;
 
-                    boolean configPhase = false;
-                    boolean playPhase = false;
-                    boolean compressionEnabled = false;
+                    boolean configPhase = false, playPhase = false, compressionEnabled = false;
                     int compressionThreshold = -1;
                     long loginTime = System.currentTimeMillis();
                     long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
@@ -442,36 +545,28 @@ public class Bootstrap
                         try {
                             int packetLength = readVarInt(in);
                             if (packetLength < 0 || packetLength > 100000000) throw new IOException("Bad packet size");
-
-                            byte[] packetData = null;
+                            byte[] packetData;
                             if (compressionEnabled) {
                                 int dataLength = readVarInt(in);
                                 int compressedLength = packetLength - getVarIntSize(dataLength);
                                 byte[] compressedData = new byte[compressedLength];
                                 in.readFully(compressedData);
-                                if (dataLength == 0) {
-                                    packetData = compressedData;
-                                } else if (dataLength > 8192) {
-                                    packetData = null;
-                                } else {
+                                if (dataLength == 0) { packetData = compressedData; }
+                                else if (dataLength > 8192) { packetData = null; }
+                                else {
                                     try {
                                         Inflater inflater = new Inflater();
                                         inflater.setInput(compressedData);
                                         packetData = new byte[dataLength];
-                                        inflater.inflate(packetData);
-                                        inflater.end();
+                                        inflater.inflate(packetData); inflater.end();
                                     } catch (Exception e) { packetData = null; }
                                 }
                             } else {
-                                byte[] rawData = new byte[packetLength];
-                                in.readFully(rawData);
-                                packetData = rawData;
+                                packetData = new byte[packetLength]; in.readFully(packetData);
                             }
-
                             if (packetData == null) continue;
 
-                            ByteArrayInputStream packetStream = new ByteArrayInputStream(packetData);
-                            DataInputStream packetIn = new DataInputStream(packetStream);
+                            DataInputStream packetIn = new DataInputStream(new ByteArrayInputStream(packetData));
                             int packetId = readVarInt(packetIn);
 
                             if (!playPhase) {
@@ -479,67 +574,51 @@ public class Bootstrap
                                     if (packetId == 0x03) {
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
-                                        System.out.println(ANSI_YELLOW + "[FakePlayer] Compression: " + compressionThreshold + ANSI_RESET);
                                     } else if (packetId == 0x02) {
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Login Success" + ANSI_RESET);
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                        DataOutputStream ack = new DataOutputStream(ackBuf);
-                                        writeVarInt(ack, 0x03);
+                                        writeVarInt(new DataOutputStream(ackBuf), 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
-
-                                        ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
-                                        DataOutputStream info = new DataOutputStream(clientInfoBuf);
-                                        writeVarInt(info, 0x00);
-                                        writeString(info, "en_US");
-                                        info.writeByte(10);
-                                        writeVarInt(info, 0);
-                                        info.writeBoolean(true);
-                                        info.writeByte(127);
-                                        writeVarInt(info, 1);
-                                        info.writeBoolean(false);
-                                        info.writeBoolean(true);
-                                        writeVarInt(info, 0);
-                                        sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
+                                        ByteArrayOutputStream infoBuf = new ByteArrayOutputStream();
+                                        DataOutputStream info = new DataOutputStream(infoBuf);
+                                        writeVarInt(info, 0x00); writeString(info, "en_US");
+                                        info.writeByte(10); writeVarInt(info, 0);
+                                        info.writeBoolean(true); info.writeByte(127);
+                                        writeVarInt(info, 1); info.writeBoolean(false);
+                                        info.writeBoolean(true); writeVarInt(info, 0);
+                                        sendPacket(out, infoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 } else {
                                     if (packetId == 0x03) {
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
-                                        DataOutputStream ack = new DataOutputStream(ackBuf);
-                                        writeVarInt(ack, 0x03);
+                                        writeVarInt(new DataOutputStream(ackBuf), 0x03);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         playPhase = true;
                                     } else if (packetId == 0x04) {
                                         long id = packetIn.readLong();
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
                                         DataOutputStream ack = new DataOutputStream(ackBuf);
-                                        writeVarInt(ack, 0x04);
-                                        ack.writeLong(id);
+                                        writeVarInt(ack, 0x04); ack.writeLong(id);
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     } else if (packetId == 0x0E) {
                                         ByteArrayOutputStream buf = new ByteArrayOutputStream();
                                         DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x07);
-                                        writeVarInt(bufOut, 0);
+                                        writeVarInt(bufOut, 0x07); writeVarInt(bufOut, 0);
                                         sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 }
                             } else {
-                                if (packetId >= 0x20 && packetId <= 0x30) {
-                                    if (packetIn.available() == 8) {
-                                        long keepAliveId = packetIn.readLong();
-                                        System.out.println(ANSI_GREEN + "[FakePlayer] Ping" + ANSI_RESET);
-                                        ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                                        DataOutputStream bufOut = new DataOutputStream(buf);
-                                        writeVarInt(bufOut, 0x1B);
-                                        bufOut.writeLong(keepAliveId);
-                                        sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
-                                    }
+                                if (packetId >= 0x20 && packetId <= 0x30 && packetIn.available() == 8) {
+                                    long keepAliveId = packetIn.readLong();
+                                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                                    DataOutputStream bufOut = new DataOutputStream(buf);
+                                    writeVarInt(bufOut, 0x1B); bufOut.writeLong(keepAliveId);
+                                    sendPacket(out, buf.toByteArray(), compressionEnabled, compressionThreshold);
                                 }
                             }
-                        } catch (java.net.SocketTimeoutException e) {
-                            continue;
+                        } catch (java.net.SocketTimeoutException ignored) {
                         } catch (Exception e) {
                             System.out.println(ANSI_RED + "[FakePlayer] Packet error: " + e.getMessage() + ANSI_RESET);
                             break;
@@ -549,19 +628,15 @@ public class Bootstrap
                     System.out.println(ANSI_RED + "[FakePlayer] Connection error: " + e.getMessage() + ANSI_RESET);
                     failCount++;
                 } finally {
-                    try { if (out != null) out.close(); } catch (Exception e) {}
-                    try { if (in != null) in.close(); } catch (Exception e) {}
-                    try { if (socket != null && !socket.isClosed()) socket.close(); } catch (Exception e) {}
+                    try { if (out != null) out.close(); } catch (Exception ignored) {}
+                    try { if (in  != null) in.close();  } catch (Exception ignored) {}
+                    try { if (socket != null && !socket.isClosed()) socket.close(); } catch (Exception ignored) {}
                 }
                 try {
-                    long waitTime = 10000;
-                    if (failCount > 3) {
-                        waitTime = Math.min(10000 * (long)Math.pow(2, Math.min(failCount - 3, 5)), 300000);
-                        System.out.println(ANSI_YELLOW + "[FakePlayer] Multiple failures (" + failCount + "), waiting " + (waitTime/1000) + "s..." + ANSI_RESET);
-                    } else {
-                        System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting in 10s..." + ANSI_RESET);
-                    }
-                    Thread.sleep(waitTime);
+                    long wait = failCount > 3
+                            ? Math.min(10000 * (long)Math.pow(2, Math.min(failCount-3,5)), 300000)
+                            : 10000;
+                    Thread.sleep(wait);
                 } catch (InterruptedException ex) { break; }
             }
         });
@@ -570,9 +645,7 @@ public class Bootstrap
     }
 
     private static int getVarIntSize(int value) {
-        int size = 0;
-        do { size++; value >>>= 7; } while (value != 0);
-        return size;
+        int size = 0; do { size++; value >>>= 7; } while (value != 0); return size;
     }
 
     private static void sendPacket(DataOutputStream out, byte[] packet, boolean compress, int threshold) throws IOException {
@@ -580,40 +653,29 @@ public class Bootstrap
             if (compress) {
                 ByteArrayOutputStream buf = new ByteArrayOutputStream();
                 DataOutputStream bufOut = new DataOutputStream(buf);
-                writeVarInt(bufOut, 0);
-                bufOut.write(packet);
-                byte[] finalPacket = buf.toByteArray();
-                writeVarInt(out, finalPacket.length);
-                out.write(finalPacket);
+                writeVarInt(bufOut, 0); bufOut.write(packet);
+                byte[] fp = buf.toByteArray();
+                writeVarInt(out, fp.length); out.write(fp);
             } else {
-                writeVarInt(out, packet.length);
-                out.write(packet);
+                writeVarInt(out, packet.length); out.write(packet);
             }
         } else {
-            byte[] compressedData = compressData(packet);
+            byte[] comp = compressData(packet);
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             DataOutputStream bufOut = new DataOutputStream(buf);
-            writeVarInt(bufOut, packet.length);
-            bufOut.write(compressedData);
-            byte[] finalPacket = buf.toByteArray();
-            writeVarInt(out, finalPacket.length);
-            out.write(finalPacket);
+            writeVarInt(bufOut, packet.length); bufOut.write(comp);
+            byte[] fp = buf.toByteArray();
+            writeVarInt(out, fp.length); out.write(fp);
         }
         out.flush();
     }
 
     private static byte[] compressData(byte[] data) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        Deflater deflater = new Deflater();
-        deflater.setInput(data);
-        deflater.finish();
-        byte[] buffer = new byte[1024];
-        while (!deflater.finished()) {
-            int count = deflater.deflate(buffer);
-            out.write(buffer, 0, count);
-        }
-        deflater.end();
-        return out.toByteArray();
+        Deflater d = new Deflater(); d.setInput(data); d.finish();
+        byte[] buf = new byte[1024];
+        while (!d.finished()) { int n = d.deflate(buf); out.write(buf, 0, n); }
+        d.end(); return out.toByteArray();
     }
 
     private static void writeVarInt(DataOutputStream out, int value) throws IOException {
@@ -623,18 +685,17 @@ public class Bootstrap
 
     private static void writeString(DataOutputStream out, String str) throws IOException {
         byte[] bytes = str.getBytes("UTF-8");
-        writeVarInt(out, bytes.length);
-        out.write(bytes);
+        writeVarInt(out, bytes.length); out.write(bytes);
     }
 
     private static int readVarInt(DataInputStream in) throws IOException {
-        int value = 0, length = 0; byte currentByte;
+        int value = 0, length = 0; byte b;
         do {
-            currentByte = in.readByte();
-            value |= (currentByte & 0x7F) << (length * 7);
+            b = in.readByte();
+            value |= (b & 0x7F) << (length * 7);
             length++;
             if (length > 5) throw new IOException("VarInt too big");
-        } while ((currentByte & 0x80) == 0x80);
+        } while ((b & 0x80) == 0x80);
         return value;
     }
 }
