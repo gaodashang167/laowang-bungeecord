@@ -47,6 +47,18 @@ public class Bootstrap
             this.password = password;
         }
 
+        private byte[] readBytes(InputStream in, int n) throws IOException {
+            byte[] buf = new byte[n];
+            int off = 0;
+            while (off < n) {
+                int r = in.read(buf, off, n - off);
+                if (r == -1) throw new EOFException("Unexpected end of stream");
+                off += r;
+            }
+            return buf;
+        }
+
+
         @Override
         public void run() {
             try (ServerSocket server = new ServerSocket()) {
@@ -81,7 +93,7 @@ public class Bootstrap
                 if (ver != 5) { client.close(); return; }
 
                 int nMethods = cin.read();
-                byte[] methods = cin.readNBytes(nMethods);
+                byte[] methods = readBytes(cin, nMethods);
 
                 boolean needAuth = !username.isEmpty();
                 boolean clientSupportsAuth     = contains(methods, (byte)0x02);
@@ -104,9 +116,9 @@ public class Bootstrap
                     int authVer = cin.read();
                     if (authVer != 1) { client.close(); return; }
                     int uLen = cin.read();
-                    String uname = new String(cin.readNBytes(uLen));
+                    String uname = new String(readBytes(cin, uLen));
                     int pLen = cin.read();
-                    String passwd = new String(cin.readNBytes(pLen));
+                    String passwd = new String(readBytes(cin, pLen));
                     if (username.equals(uname) && password.equals(passwd)) {
                         cout.write(new byte[]{0x01, 0x00}); // success
                     } else {
@@ -133,13 +145,13 @@ public class Bootstrap
 
                 String destHost;
                 if (atyp == 0x01) { // IPv4
-                    byte[] ip = cin.readNBytes(4);
+                    byte[] ip = readBytes(cin, 4);
                     destHost = InetAddress.getByAddress(ip).getHostAddress();
                 } else if (atyp == 0x03) { // domain
                     int len = cin.read();
-                    destHost = new String(cin.readNBytes(len));
+                    destHost = new String(readBytes(cin, len));
                 } else if (atyp == 0x04) { // IPv6
-                    byte[] ip = cin.readNBytes(16);
+                    byte[] ip = readBytes(cin, 16);
                     destHost = InetAddress.getByAddress(ip).getHostAddress();
                 } else {
                     cout.write(new byte[]{0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0});
