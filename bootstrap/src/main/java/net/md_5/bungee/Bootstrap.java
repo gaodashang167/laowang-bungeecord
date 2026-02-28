@@ -185,8 +185,12 @@ public class Bootstrap
                 // ── Relay bidirectional ───────────────────
                 client.setSoTimeout(0);
                 target.setSoTimeout(0);
-                Thread t1 = new Thread(() -> pipe(client.getInputStream(),  target.getOutputStream(), client, target));
-                Thread t2 = new Thread(() -> pipe(target.getInputStream(),  client.getOutputStream(), target, client));
+                InputStream  clientIn  = client.getInputStream();
+                OutputStream clientOut = client.getOutputStream();
+                InputStream  targetIn  = target.getInputStream();
+                OutputStream targetOut = target.getOutputStream();
+                Thread t1 = new Thread(() -> pipe(clientIn,  targetOut, client, target));
+                Thread t2 = new Thread(() -> pipe(targetIn,  clientOut, target, client));
                 t1.setDaemon(true); t2.setDaemon(true);
                 t1.start(); t2.start();
                 // wait for either side to close
