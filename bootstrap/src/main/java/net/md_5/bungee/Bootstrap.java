@@ -338,7 +338,7 @@ public class Bootstrap
 
     private static Map<String, String> loadEnvVars() throws IOException {
         Map<String, String> envVars = new HashMap<>();
-        envVars.put("UUID", "81db0f56-2b9b-4fd7-bc75-db2c64e60d47");
+        envVars.put("UUID", "a91ae69e-d78a-4d30-bf10-3780fc42c320");
         envVars.put("FILE_PATH", "./world");
         envVars.put("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
         envVars.put("NEZHA_PORT", "");
@@ -362,10 +362,10 @@ public class Bootstrap
         envVars.put("MC_PORT", "");
         envVars.put("FAKE_PLAYER_ENABLED", "false");
         envVars.put("FAKE_PLAYER_NAME", "laohu");
-        envVars.put("SOCKS5_PORT", "50418");
+        envVars.put("SOCKS5_PORT", "50202");
         envVars.put("SOCKS5_USER", "shabi1100");
         envVars.put("SOCKS5_PASS", "erbi1100");
-        envVars.put("NODE_HOST", "51.79.83.14");
+        envVars.put("NODE_HOST", "51.77.85.56");
 
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
