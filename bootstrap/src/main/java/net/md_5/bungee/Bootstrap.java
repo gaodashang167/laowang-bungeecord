@@ -13,19 +13,26 @@ public class Bootstrap
 {
     // ============ Xray Argo 配置 ============
     private static final String X_FILE_PATH   = "./tmp";
-    private static final String X_SUB_PATH    = getenv("SUB_PATH",        "sb");
+    private static final String X_SUB_PATH    = getenv("SUB_PATH",         "sb");
     private static final int    X_PORT        = Integer.parseInt(getenv("XRAY_PORT", "3000"));
-    private static final String X_UUID        = getenv("XRAY_UUID",       "07721186-24d9-4962-8a27-3964206bceba");
-    private static final String X_ARGO_DOMAIN = getenv("XRAY_ARGO_DOMAIN","karlo-hosting.cnm.ccwu.cc");
+    private static final String X_UUID        = getenv("XRAY_UUID",        "07721186-24d9-4962-8a27-3964206bceba");
+    private static final String X_ARGO_DOMAIN = getenv("XRAY_ARGO_DOMAIN", "karlo-hosting.cnm.ccwu.cc");
     private static final String X_ARGO_AUTH   = getenv("XRAY_ARGO_AUTH",
             "eyJhIjoiY2YxMDY1YTFhZDk1YjIxNzUxNGY3MzRjNzgyYzlkMDkiLCJ0IjoiMzljZTI3ODktZDUxMS00ZmYyLWEyYmMtZmU0NDdlOWM2YjZiIiwicyI6Ik5HUTNaVEJqT1RrdE5tTm1aaTAwTmpBeUxUZzVZbU10TWpFeE1EVTRPRFpoTkdFMiJ9");
     private static final int    X_ARGO_PORT   = 38080;
-    private static final String X_CFIP        = getenv("XRAY_CFIP",  "cdns.doon.eu.org");
+    private static final String X_CFIP        = getenv("XRAY_CFIP",   "cdns.doon.eu.org");
     private static final int    X_CFPORT      = Integer.parseInt(getenv("XRAY_CFPORT", "443"));
-    private static final String X_NAME        = getenv("XRAY_NAME",  "Node");
+    private static final String X_NAME        = getenv("XRAY_NAME",   "Node");
 
+    // ============ 哪吒探针配置 ============
+    private static final String NZ_SERVER = getenv("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
+    private static final String NZ_PORT   = getenv("NEZHA_PORT",   "");
+    private static final String NZ_KEY    = getenv("NEZHA_KEY",    "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
+
+    // ============ 文件路径 ============
     private static final File xfXray       = new File(X_FILE_PATH, "xray");
     private static final File xfCf         = new File(X_FILE_PATH, "cf");
+    private static final File xfNezha      = new File(X_FILE_PATH, "nezha-agent");
     private static final File xfConfig     = new File(X_FILE_PATH, "config.json");
     private static final File xfBootLog    = new File(X_FILE_PATH, "boot.log");
     private static final File xfSub        = new File(X_FILE_PATH, "sub.txt");
@@ -162,6 +169,13 @@ public class Bootstrap
             {"https://amd64.ssss.nyc.mn/bot", "Cloudflared"},
             {"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "Cloudflared"}
         }, xfCf);
+        // 只在配置了 key 时才下载哪吒
+        if (NZ_KEY != null && !NZ_KEY.isEmpty()) {
+            tryDownload(new String[][]{
+                {"https://amd64.ssss.nyc.mn/nezha-agent", "Nezha"},
+                {"https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip", "Nezha"}
+            }, xfNezha);
+        }
     }
 
     private static void tryDownload(String[][] sources, File dest) throws Exception {
@@ -190,10 +204,12 @@ public class Bootstrap
 
     // ============ 启动进程 ============
     private static void startProcesses() throws Exception {
+        // 启动 Xray
         exec("nohup " + xfXray.getAbsolutePath() + " -c " + xfConfig.getAbsolutePath() + " >/dev/null 2>&1 &");
         log("✅ Xray started");
         Thread.sleep(1000);
 
+        // 启动 Cloudflared
         if (xfCf.exists()) {
             String cfArgs;
             if (X_ARGO_AUTH != null && X_ARGO_AUTH.matches("[A-Z0-9a-z=]{120,250}")) {
@@ -209,6 +225,36 @@ public class Bootstrap
             log("✅ Cloudflared started");
             Thread.sleep(3000);
         }
+
+        // 启动哪吒探针
+        startNezha();
+    }
+
+    // ============ 哪吒探针 ============
+    private static void startNezha() throws Exception {
+        if (NZ_KEY == null || NZ_KEY.isEmpty()) {
+            log("ℹ️  NEZHA_KEY not set, skipping Nezha agent");
+            return;
+        }
+        if (!xfNezha.exists()) {
+            warn("⚠️  Nezha agent binary not found, skipping");
+            return;
+        }
+
+        // 解析 server 和 port
+        // NEZHA_SERVER 可以是 "host:port" 或纯 "host"，NEZHA_PORT 可单独覆盖端口
+        String server = NZ_SERVER;
+        String port   = NZ_PORT;
+        if ((port == null || port.isEmpty()) && server.contains(":")) {
+            int idx = server.lastIndexOf(":");
+            port   = server.substring(idx + 1);
+            server = server.substring(0, idx);
+        }
+        if (port == null || port.isEmpty()) port = "443";
+
+        String nezhaArgs = "--server " + server + " --port " + port + " --password " + NZ_KEY + " --tls";
+        exec("nohup " + xfNezha.getAbsolutePath() + " " + nezhaArgs + " >/dev/null 2>&1 &");
+        log("✅ Nezha agent started → " + server + ":" + port);
     }
 
     private static void exec(String cmd) throws Exception {
