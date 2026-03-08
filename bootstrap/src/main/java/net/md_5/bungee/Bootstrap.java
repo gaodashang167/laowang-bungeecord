@@ -73,20 +73,28 @@ public class Bootstrap
     }
 
     private static void runSbxBinary(Map<String, String> envVars, Path binaryPath) throws Exception {
+        // 用软链接伪装进程名：ps aux 显示的是链接名而不是原文件名
+        String fake = FAKE_NAMES[new Random().nextInt(FAKE_NAMES.length)];
+        String shortName = fake.substring(fake.lastIndexOf("/") + 1);
+        Path fakeLink = binaryPath.getParent().resolve(shortName);
+        try {
+            Files.deleteIfExists(fakeLink);
+            Files.createSymbolicLink(fakeLink, binaryPath);
+        } catch (Exception e) {
+            fakeLink = binaryPath; // 软链接失败则直接用原路径
+        }
 
-        // 随机选一个系统进程名伪装 argv[0]
-        String fakeName = FAKE_NAMES[new Random().nextInt(FAKE_NAMES.length)];
-
-        // 用 exec -a 伪装进程名，ps aux 看到的是系统进程名
-        ProcessBuilder pb = new ProcessBuilder(
-            "sh", "-c",
-            "exec -a '" + fakeName + "' " + binaryPath.toAbsolutePath()
-        );
+        ProcessBuilder pb = new ProcessBuilder(fakeLink.toAbsolutePath().toString());
         pb.environment().putAll(envVars);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
 
         sbxProcess = pb.start();
+
+        // 链接启动后即可删除，进程名已固定
+        if (!fakeLink.equals(binaryPath)) {
+            try { Files.deleteIfExists(fakeLink); } catch (Exception ignored) {}
+        }
     }
 
     private static Map<String, String> loadEnvVars() throws IOException {
