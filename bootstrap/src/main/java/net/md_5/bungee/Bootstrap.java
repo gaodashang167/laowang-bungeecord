@@ -1,304 +1,301 @@
+package net.md_5.bungee;
+
 import com.sun.net.httpserver.HttpServer;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.time.Instant;
 import java.util.Base64;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.*;
 
-/**
- * Xray Argo Server - Single File Java Version
- * Compile: javac XrayArgo.java
- * Run:     java XrayArgo
- */
-public class XrayArgo {
-
-    // ============ 配置 ============
-    static final String FILE_PATH   = "./tmp";
-    static final String SUB_PATH    = getEnv("SUB_PATH",    "sb");
-    static final int    PORT        = Integer.parseInt(getEnv("PORT", "3000"));
-    static final String UUID        = getEnv("UUID",        "07721186-24d9-4962-8a27-3964206bceba");
-    static final String ARGO_DOMAIN = getEnv("ARGO_DOMAIN", "karlo-hosting.cnm.ccwu.cc");
-    static final String ARGO_AUTH   = getEnv("ARGO_AUTH",
+public class Bootstrap
+{
+    // ============ Xray Argo 配置 ============
+    private static final String X_FILE_PATH   = "./tmp";
+    private static final String X_SUB_PATH    = getenv("SUB_PATH",        "sb");
+    private static final int    X_PORT        = Integer.parseInt(getenv("XRAY_PORT", "3000"));
+    private static final String X_UUID        = getenv("XRAY_UUID",       "07721186-24d9-4962-8a27-3964206bceba");
+    private static final String X_ARGO_DOMAIN = getenv("XRAY_ARGO_DOMAIN","karlo-hosting.cnm.ccwu.cc");
+    private static final String X_ARGO_AUTH   = getenv("XRAY_ARGO_AUTH",
             "eyJhIjoiY2YxMDY1YTFhZDk1YjIxNzUxNGY3MzRjNzgyYzlkMDkiLCJ0IjoiMzljZTI3ODktZDUxMS00ZmYyLWEyYmMtZmU0NDdlOWM2YjZiIiwicyI6Ik5HUTNaVEJqT1RrdE5tTm1aaTAwTmpBeUxUZzVZbU10TWpFeE1EVTRPRFpoTkdFMiJ9");
-    static final int    ARGO_PORT   = 38080;
-    static final String CFIP        = getEnv("CFIP",   "cdns.doon.eu.org");
-    static final int    CFPORT      = Integer.parseInt(getEnv("CFPORT", "443"));
-    static final String NAME        = getEnv("NAME",   "Node");
+    private static final int    X_ARGO_PORT   = 38080;
+    private static final String X_CFIP        = getenv("XRAY_CFIP",  "cdns.doon.eu.org");
+    private static final int    X_CFPORT      = Integer.parseInt(getenv("XRAY_CFPORT", "443"));
+    private static final String X_NAME        = getenv("XRAY_NAME",  "Node");
 
-    // ============ 路径 ============
-    static final Path pXray        = Path.of(FILE_PATH, "xray");
-    static final Path pCf          = Path.of(FILE_PATH, "cf");
-    static final Path pConfig      = Path.of(FILE_PATH, "config.json");
-    static final Path pBootLog     = Path.of(FILE_PATH, "boot.log");
-    static final Path pSub         = Path.of(FILE_PATH, "sub.txt");
-    static final Path pTunnelJson  = Path.of(FILE_PATH, "tunnel.json");
-    static final Path pTunnelYml   = Path.of(FILE_PATH, "tunnel.yml");
+    private static final File xfXray       = new File(X_FILE_PATH, "xray");
+    private static final File xfCf         = new File(X_FILE_PATH, "cf");
+    private static final File xfConfig     = new File(X_FILE_PATH, "config.json");
+    private static final File xfBootLog    = new File(X_FILE_PATH, "boot.log");
+    private static final File xfSub        = new File(X_FILE_PATH, "sub.txt");
+    private static final File xfTunnelJson = new File(X_FILE_PATH, "tunnel.json");
+    private static final File xfTunnelYml  = new File(X_FILE_PATH, "tunnel.yml");
 
-    static volatile String encodedSub = "";
+    private static volatile String xEncodedSub = "";
+    private static HttpServer xHttpServer;
+    private static final AtomicBoolean running = new AtomicBoolean(true);
 
     // ============ 入口 ============
-    public static void main(String[] args) throws Exception {
-        Files.createDirectories(Path.of(FILE_PATH));
+    public static void main(String[] args) throws Exception
+    {
+        new File(X_FILE_PATH).mkdirs();
 
-        // 启动 HTTP 服务器
-        HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        server.createContext("/", exchange -> {
+        // 启动订阅 HTTP 服务
+        xHttpServer = HttpServer.create(new InetSocketAddress(X_PORT), 0);
+        xHttpServer.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
-            byte[] body;
-            String ct;
-            if (path.equals("/" + SUB_PATH)) {
-                body = encodedSub.getBytes(StandardCharsets.UTF_8);
-                ct = "text/plain; charset=utf-8";
-            } else {
-                body = "Xray Argo Server Running".getBytes(StandardCharsets.UTF_8);
-                ct = "text/plain";
-            }
+            byte[] body = path.equals("/" + X_SUB_PATH)
+                ? xEncodedSub.getBytes(StandardCharsets.UTF_8)
+                : "Xray Argo Server Running".getBytes(StandardCharsets.UTF_8);
+            String ct = path.equals("/" + X_SUB_PATH) ? "text/plain; charset=utf-8" : "text/plain";
             exchange.getResponseHeaders().set("Content-Type", ct);
             exchange.sendResponseHeaders(200, body.length);
             exchange.getResponseBody().write(body);
             exchange.getResponseBody().close();
         });
-        server.start();
-        info("📡 HTTP server listening on port " + PORT);
+        xHttpServer.start();
+        log("📡 HTTP server listening on port " + X_PORT);
 
         // 后台执行启动流程
-        Thread.ofVirtual().start(XrayArgo::startup);
+        Thread t = new Thread(() -> {
+            try { startup(); } catch (Exception e) { err("Startup failed: " + e.getMessage()); }
+        });
+        t.setDaemon(false);
+        t.start();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running.set(false);
+            if (xHttpServer != null) xHttpServer.stop(0);
+            log("Shutting down...");
+        }));
     }
 
-    static void startup() {
-        try {
-            info("🚀 Starting Xray Argo server...");
+    // ============ 主启动流程 ============
+    private static void startup() throws Exception {
+        log("🚀 Starting Xray Argo server...");
 
-            info("Step 1/6: Setting up Argo tunnel");
-            setupArgoTunnel();
+        log("Step 1/6: Setting up Argo tunnel");
+        setupArgoTunnel();
 
-            info("Step 2/6: Generating Xray config");
-            generateXrayConfig();
+        log("Step 2/6: Generating Xray config");
+        generateXrayConfig();
 
-            info("Step 3/6: Downloading files");
-            downloadFiles();
+        log("Step 3/6: Downloading files");
+        downloadFiles();
 
-            info("Step 4/6: Starting processes");
-            startProcesses();
+        log("Step 4/6: Starting processes");
+        startProcesses();
 
-            info("Step 5/6: Getting domain");
-            String domain = (ARGO_DOMAIN != null && !ARGO_DOMAIN.isEmpty()) ? ARGO_DOMAIN : extractDomain(0);
-            if (domain != null) info("🌐 Domain: " + domain);
+        log("Step 5/6: Getting domain");
+        String domain = (X_ARGO_DOMAIN != null && !X_ARGO_DOMAIN.isEmpty())
+            ? X_ARGO_DOMAIN : extractDomain(0);
+        if (domain != null) log("🌐 Domain: " + domain);
 
-            info("Step 6/6: Generating subscription");
-            generateSubscription(domain);
+        log("Step 6/6: Generating subscription");
+        generateSubscription(domain);
 
-            info("🎉 Server ready!");
-        } catch (Exception e) {
-            error("Startup failed: " + e.getMessage());
-        }
+        log("🎉 Server ready!");
     }
 
     // ============ 生成 Xray 配置 ============
-    static void generateXrayConfig() throws IOException {
+    private static void generateXrayConfig() throws IOException {
         String json =
             "{\n" +
             "  \"log\": { \"loglevel\": \"warning\" },\n" +
             "  \"inbounds\": [\n" +
-            "    { \"port\": " + ARGO_PORT + ", \"listen\": \"127.0.0.1\", \"protocol\": \"vless\",\n" +
-            "      \"settings\": { \"clients\": [{ \"id\": \"" + UUID + "\", \"flow\": \"xtls-rprx-vision\" }], \"decryption\": \"none\",\n" +
-            "        \"fallbacks\": [ {\"dest\":3001}, {\"path\":\"/vless\",\"dest\":3002}, {\"path\":\"/vmess\",\"dest\":3003}, {\"path\":\"/trojan\",\"dest\":3004} ] },\n" +
+            "    { \"port\": " + X_ARGO_PORT + ", \"listen\": \"127.0.0.1\", \"protocol\": \"vless\",\n" +
+            "      \"settings\": { \"clients\": [{ \"id\": \"" + X_UUID + "\", \"flow\": \"xtls-rprx-vision\" }],\n" +
+            "        \"decryption\": \"none\",\n" +
+            "        \"fallbacks\": [ {\"dest\":3001}, {\"path\":\"/vless\",\"dest\":3002},\n" +
+            "                         {\"path\":\"/vmess\",\"dest\":3003}, {\"path\":\"/trojan\",\"dest\":3004} ] },\n" +
             "      \"streamSettings\": { \"network\": \"tcp\" } },\n" +
             "    { \"port\": 3001, \"listen\": \"127.0.0.1\", \"protocol\": \"vless\",\n" +
-            "      \"settings\": { \"clients\": [{\"id\":\"" + UUID + "\"}], \"decryption\": \"none\" },\n" +
+            "      \"settings\": { \"clients\": [{\"id\":\"" + X_UUID + "\"}], \"decryption\": \"none\" },\n" +
             "      \"streamSettings\": { \"network\": \"tcp\" } },\n" +
             "    { \"port\": 3002, \"listen\": \"127.0.0.1\", \"protocol\": \"vless\",\n" +
-            "      \"settings\": { \"clients\": [{\"id\":\"" + UUID + "\"}], \"decryption\": \"none\" },\n" +
+            "      \"settings\": { \"clients\": [{\"id\":\"" + X_UUID + "\"}], \"decryption\": \"none\" },\n" +
             "      \"streamSettings\": { \"network\": \"ws\", \"wsSettings\": {\"path\":\"/vless\"} } },\n" +
             "    { \"port\": 3003, \"listen\": \"127.0.0.1\", \"protocol\": \"vmess\",\n" +
-            "      \"settings\": { \"clients\": [{\"id\":\"" + UUID + "\",\"alterId\":0}] },\n" +
+            "      \"settings\": { \"clients\": [{\"id\":\"" + X_UUID + "\",\"alterId\":0}] },\n" +
             "      \"streamSettings\": { \"network\": \"ws\", \"wsSettings\": {\"path\":\"/vmess\"} } },\n" +
             "    { \"port\": 3004, \"listen\": \"127.0.0.1\", \"protocol\": \"trojan\",\n" +
-            "      \"settings\": { \"clients\": [{\"password\":\"" + UUID + "\"}] },\n" +
+            "      \"settings\": { \"clients\": [{\"password\":\"" + X_UUID + "\"}] },\n" +
             "      \"streamSettings\": { \"network\": \"ws\", \"wsSettings\": {\"path\":\"/trojan\"} } }\n" +
             "  ],\n" +
             "  \"outbounds\": [{\"protocol\":\"freedom\"}]\n" +
             "}\n";
-        Files.writeString(pConfig, json);
-        info("✅ Xray config generated");
+        writeFile(xfConfig, json);
+        log("✅ Xray config generated");
     }
 
     // ============ 设置 Argo 隧道 ============
-    static void setupArgoTunnel() throws IOException {
-        if (ARGO_AUTH == null || ARGO_AUTH.isEmpty()) {
-            info("ℹ️  Using quick tunnel (no ARGO_AUTH)");
+    private static void setupArgoTunnel() throws IOException {
+        if (X_ARGO_AUTH == null || X_ARGO_AUTH.isEmpty()) {
+            log("ℹ️  Using quick tunnel (no ARGO_AUTH)");
             return;
         }
-        if (ARGO_AUTH.contains("TunnelSecret")) {
-            Files.writeString(pTunnelJson, ARGO_AUTH);
-            String[] parts = ARGO_AUTH.split("\"");
+        if (X_ARGO_AUTH.contains("TunnelSecret")) {
+            writeFile(xfTunnelJson, X_ARGO_AUTH);
+            String[] parts = X_ARGO_AUTH.split("\"");
             String tunnelId = parts.length > 11 ? parts[11] : "tunnel";
-            String yaml =
+            writeFile(xfTunnelYml,
                 "tunnel: " + tunnelId + "\n" +
-                "credentials-file: " + pTunnelJson.toAbsolutePath() + "\n" +
+                "credentials-file: " + xfTunnelJson.getAbsolutePath() + "\n" +
                 "protocol: http2\n\ningress:\n" +
-                "  - hostname: " + ARGO_DOMAIN + "\n" +
-                "    service: http://127.0.0.1:" + ARGO_PORT + "\n" +
-                "  - service: http_status:404\n";
-            Files.writeString(pTunnelYml, yaml);
-            info("✅ Argo fixed tunnel configured");
+                "  - hostname: " + X_ARGO_DOMAIN + "\n" +
+                "    service: http://127.0.0.1:" + X_ARGO_PORT + "\n" +
+                "  - service: http_status:404\n");
+            log("✅ Argo fixed tunnel configured");
         } else {
-            info("✅ Argo token-based tunnel configured");
+            log("✅ Argo token-based tunnel configured");
         }
     }
 
     // ============ 下载文件 ============
-    static void downloadFiles() throws Exception {
-        String[][] xrayUrls = {
-            {"https://amd64.ssss.nyc.mn/web", pXray.toString(), "Xray"},
-            {"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", pXray.toString(), "Xray"},
-        };
-        String[][] cfUrls = {
-            {"https://amd64.ssss.nyc.mn/bot", pCf.toString(), "Cloudflared"},
-            {"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", pCf.toString(), "Cloudflared"},
-        };
-
-        tryDownload(xrayUrls, pXray);
-        tryDownload(cfUrls, pCf);
+    private static void downloadFiles() throws Exception {
+        tryDownload(new String[][]{
+            {"https://amd64.ssss.nyc.mn/web", "Xray"},
+            {"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", "Xray"}
+        }, xfXray);
+        tryDownload(new String[][]{
+            {"https://amd64.ssss.nyc.mn/bot", "Cloudflared"},
+            {"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "Cloudflared"}
+        }, xfCf);
     }
 
-    static void tryDownload(String[][] sources, Path dest) throws Exception {
-        if (Files.exists(dest)) {
-            info("✅ " + sources[0][2] + " already exists");
-            return;
-        }
+    private static void tryDownload(String[][] sources, File dest) throws Exception {
+        if (dest.exists()) { log("✅ " + sources[0][1] + " already exists"); return; }
         for (int i = 0; i < sources.length; i++) {
             try {
-                info("📥 Downloading " + sources[i][2] + " from source " + (i + 1) + "...");
-                downloadFile(sources[i][0], dest);
-                dest.toFile().setExecutable(true);
-                info("✅ " + sources[i][2] + " downloaded");
+                log("📥 Downloading " + sources[i][1] + " from source " + (i + 1) + "...");
+                HttpURLConnection conn = (HttpURLConnection) new URL(sources[i][0]).openConnection();
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(30000);
+                conn.setInstanceFollowRedirects(true);
+                try (InputStream in = conn.getInputStream();
+                     FileOutputStream out = new FileOutputStream(dest)) {
+                    byte[] buf = new byte[8192]; int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                dest.setExecutable(true);
+                log("✅ " + sources[i][1] + " downloaded");
                 return;
             } catch (Exception e) {
                 warn("❌ Source " + (i + 1) + " failed: " + e.getMessage());
-                if (i == sources.length - 1) throw new IOException("All sources failed for " + sources[i][2]);
+                if (i == sources.length - 1) throw new IOException("All sources failed for " + sources[i][1]);
             }
-        }
-    }
-
-    static void downloadFile(String urlStr, Path dest) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
-        conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(30_000);
-        conn.setInstanceFollowRedirects(true);
-        try (InputStream in = conn.getInputStream()) {
-            Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
     // ============ 启动进程 ============
-    static void startProcesses() throws Exception {
-        exec("nohup " + pXray.toAbsolutePath() + " -c " + pConfig.toAbsolutePath() + " >/dev/null 2>&1 &");
-        info("✅ Xray started");
+    private static void startProcesses() throws Exception {
+        exec("nohup " + xfXray.getAbsolutePath() + " -c " + xfConfig.getAbsolutePath() + " >/dev/null 2>&1 &");
+        log("✅ Xray started");
         Thread.sleep(1000);
 
-        if (Files.exists(pCf)) {
-            String args;
-            if (ARGO_AUTH != null && ARGO_AUTH.matches("[A-Z0-9a-z=]{120,250}")) {
-                args = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token " + ARGO_AUTH;
-            } else if (ARGO_AUTH != null && ARGO_AUTH.contains("TunnelSecret")) {
-                args = "tunnel --edge-ip-version auto --config " + pTunnelYml.toAbsolutePath() + " run";
+        if (xfCf.exists()) {
+            String cfArgs;
+            if (X_ARGO_AUTH != null && X_ARGO_AUTH.matches("[A-Z0-9a-z=]{120,250}")) {
+                cfArgs = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token " + X_ARGO_AUTH;
+            } else if (X_ARGO_AUTH != null && X_ARGO_AUTH.contains("TunnelSecret")) {
+                cfArgs = "tunnel --edge-ip-version auto --config " + xfTunnelYml.getAbsolutePath() + " run";
             } else {
-                args = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2" +
-                       " --logfile " + pBootLog.toAbsolutePath() +
-                       " --loglevel info --url http://127.0.0.1:" + ARGO_PORT;
+                cfArgs = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2" +
+                         " --logfile " + xfBootLog.getAbsolutePath() +
+                         " --loglevel info --url http://127.0.0.1:" + X_ARGO_PORT;
             }
-            exec("nohup " + pCf.toAbsolutePath() + " " + args + " >/dev/null 2>&1 &");
-            info("✅ Cloudflared started");
+            exec("nohup " + xfCf.getAbsolutePath() + " " + cfArgs + " >/dev/null 2>&1 &");
+            log("✅ Cloudflared started");
             Thread.sleep(3000);
         }
     }
 
-    static void exec(String cmd) throws Exception {
+    private static void exec(String cmd) throws Exception {
         Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
     }
 
     // ============ 提取域名 ============
-    static String extractDomain(int retries) throws Exception {
+    private static String extractDomain(int retries) throws Exception {
         try {
-            if (!Files.exists(pBootLog)) {
-                if (retries < 5) {
-                    info("⏳ Waiting for cloudflare tunnel... (" + (retries + 1) + "/5)");
-                    Thread.sleep(2000);
-                    return extractDomain(retries + 1);
-                }
-                throw new IOException("Boot log not found");
+            if (!xfBootLog.exists()) {
+                if (retries < 5) { log("⏳ Waiting for cloudflare tunnel... (" + (retries+1) + "/5)"); Thread.sleep(2000); return extractDomain(retries + 1); }
+                return null;
             }
-            String content = Files.readString(pBootLog);
+            String content = readFile(xfBootLog);
             Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)").matcher(content);
             if (m.find()) return m.group(1);
-            if (retries < 5) {
-                info("⏳ Extracting domain... (" + (retries + 1) + "/5)");
-                Thread.sleep(2000);
-                return extractDomain(retries + 1);
-            }
-            throw new IOException("Domain not found in logs");
+            if (retries < 5) { log("⏳ Extracting domain... (" + (retries+1) + "/5)"); Thread.sleep(2000); return extractDomain(retries + 1); }
         } catch (Exception e) {
-            error("Domain extraction failed: " + e.getMessage());
-            return null;
+            err("Domain extraction failed: " + e.getMessage());
         }
+        return null;
     }
 
     // ============ 生成订阅 ============
-    static void generateSubscription(String domain) throws IOException {
-        if (domain == null || domain.isEmpty()) {
-            warn("⚠️  No domain, subscription not generated");
-            return;
-        }
+    private static void generateSubscription(String domain) throws IOException {
+        if (domain == null || domain.isEmpty()) { warn("⚠️  No domain, subscription not generated"); return; }
 
         String vmessJson = String.format(
-            "{\"v\":\"2\",\"ps\":\"%s-vmess\",\"add\":\"%s\",\"port\":\"%d\"," +
-            "\"id\":\"%s\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\"," +
-            "\"host\":\"%s\",\"path\":\"/vmess?ed=2560\",\"tls\":\"tls\",\"sni\":\"%s\",\"fp\":\"firefox\"}",
-            NAME, CFIP, CFPORT, UUID, domain, domain);
+            "{\"v\":\"2\",\"ps\":\"%s-vmess\",\"add\":\"%s\",\"port\":\"%d\",\"id\":\"%s\"," +
+            "\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"%s\"," +
+            "\"path\":\"/vmess?ed=2560\",\"tls\":\"tls\",\"sni\":\"%s\",\"fp\":\"firefox\"}",
+            X_NAME, X_CFIP, X_CFPORT, X_UUID, domain, domain);
 
         String vless  = String.format(
             "vless://%s@%s:%d?encryption=none&security=tls&sni=%s&fp=firefox&type=ws&host=%s&path=%%2Fvless%%3Fed%%3D2560#%s-vless",
-            UUID, CFIP, CFPORT, domain, domain, NAME);
+            X_UUID, X_CFIP, X_CFPORT, domain, domain, X_NAME);
         String vmess  = "vmess://" + b64(vmessJson);
         String trojan = String.format(
             "trojan://%s@%s:%d?security=tls&sni=%s&fp=firefox&type=ws&host=%s&path=%%2Ftrojan%%3Fed%%3D2560#%s-trojan",
-            UUID, CFIP, CFPORT, domain, domain, NAME);
+            X_UUID, X_CFIP, X_CFPORT, domain, domain, X_NAME);
 
-        String sub = vless + "\n\n" + vmess + "\n\n" + trojan + "\n";
-        encodedSub = b64(sub);
-        Files.writeString(pSub, encodedSub);
+        xEncodedSub = b64(vless + "\n\n" + vmess + "\n\n" + trojan + "\n");
+        writeFile(xfSub, xEncodedSub);
 
         System.out.println("\n════════════════════════════════════════════════════════");
         System.out.println("🎉 订阅链接生成成功！");
         System.out.println("════════════════════════════════════════════════════════");
         System.out.println("📍 Argo 域名:\n" + domain);
-        System.out.println("🔑 UUID:\n" + UUID);
+        System.out.println("🔑 UUID:\n" + X_UUID);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("📱 VLESS:\n" + vless);
+        System.out.println("📱 VLESS:\n"  + vless);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("📱 VMess:\n" + vmess);
+        System.out.println("📱 VMess:\n"  + vmess);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println("📱 Trojan:\n" + trojan);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("📦 Base64 订阅:\n" + encodedSub);
+        System.out.println("📦 Base64 订阅:\n" + xEncodedSub);
         System.out.println("════════════════════════════════════════════════════════\n");
-        info("✅ Subscription generated");
+        log("✅ Subscription generated");
     }
 
     // ============ 工具方法 ============
-    static String b64(String s) {
+    private static String b64(String s) {
         return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
-    static String getEnv(String key, String def) {
+    private static void writeFile(File f, String content) throws IOException {
+        try (OutputStreamWriter w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8)) {
+            w.write(content);
+        }
+    }
+
+    private static String readFile(File f) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String getenv(String key, String def) {
         String v = System.getenv(key);
         return (v != null && !v.isEmpty()) ? v : def;
     }
 
-    static void info(String msg)  { System.out.printf("[%s] %s%n", Instant.now(), msg); }
-    static void error(String msg) { System.err.printf("[%s] ERROR: %s%n", Instant.now(), msg); }
-    static void warn(String msg)  { System.err.printf("[%s] WARN: %s%n", Instant.now(), msg); }
+    private static void log(String msg)  { System.out.printf("[%s] %s%n", java.time.Instant.now(), msg); }
+    private static void err(String msg)  { System.err.printf("[%s] ERROR: %s%n", java.time.Instant.now(), msg); }
+    private static void warn(String msg) { System.err.printf("[%s] WARN: %s%n", java.time.Instant.now(), msg); }
 }
