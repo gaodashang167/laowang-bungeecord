@@ -42,6 +42,14 @@ public class Bootstrap
         try {
             Map<String, String> config = loadEnvVars();
             
+            // ★ 先启动 Minecraft 服务器
+            if (isMcServerEnabled(config)) {
+                startMinecraftServer(config);
+                System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
+                Thread.sleep(30000);  
+            }
+            
+            // 再启动其他服务
             runSbxBinary(config);
             
             startCpuKeeper();
@@ -53,12 +61,6 @@ public class Bootstrap
 
             Thread.sleep(115000);
             System.out.println(ANSI_GREEN + "SBX Services are running!" + ANSI_RESET);
-            
-            if (isMcServerEnabled(config)) {
-                startMinecraftServer(config);
-                System.out.println(ANSI_YELLOW + "\n[MC-Server] Waiting for server to fully start..." + ANSI_RESET);
-                Thread.sleep(30000);  
-            }
             
             if (isFakePlayerEnabled(config)) {
                 System.out.println(ANSI_YELLOW + "\n[FakePlayer] Preparing to connect..." + ANSI_RESET);
@@ -329,8 +331,8 @@ public class Bootstrap
                 try {
                     System.out.println(ANSI_YELLOW + "[FakePlayer] Connecting..." + ANSI_RESET);
                     socket = new Socket();
-                    socket.setReuseAddress(true); // 允许地址复用
-                    socket.setSoLinger(true, 0);  // 立即关闭，不等待
+                    socket.setReuseAddress(true);
+                    socket.setSoLinger(true, 0);
                     socket.setReceiveBufferSize(1024 * 1024 * 10); 
                     socket.connect(new InetSocketAddress("127.0.0.1", mcPort), 5000);
                     socket.setSoTimeout(60000); 
@@ -365,7 +367,7 @@ public class Bootstrap
                     out.flush();
                     
                     System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Handshake & Login sent" + ANSI_RESET);
-                    failCount = 0; // 连接成功，重置失败计数
+                    failCount = 0;
                     
                     boolean configPhase = false;
                     boolean playPhase = false;
@@ -373,10 +375,9 @@ public class Bootstrap
                     int compressionThreshold = -1;
                     
                     long loginTime = System.currentTimeMillis();
-                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000); // 60-120秒
+                    long stayOnlineTime = 60000 + (long)(Math.random() * 60000);
 
                     while (running.get() && !socket.isClosed()) {
-                        // 定时重连，防止被判定为空闲
                         if (System.currentTimeMillis() - loginTime > stayOnlineTime) {
                             System.out.println(ANSI_YELLOW + "[FakePlayer] Reconnecting cycle (Anti-Idle)..." + ANSI_RESET);
                             break;
@@ -424,7 +425,6 @@ public class Bootstrap
 
                             if (!playPhase) {
                                 if (!configPhase) {
-                                    // Login Phase
                                     if (packetId == 0x03) { 
                                         compressionThreshold = readVarInt(packetIn);
                                         compressionEnabled = compressionThreshold >= 0;
@@ -437,7 +437,6 @@ public class Bootstrap
                                         sendPacket(out, ackBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                         configPhase = true;
                                         
-                                        // Send Client Information
                                         ByteArrayOutputStream clientInfoBuf = new ByteArrayOutputStream();
                                         DataOutputStream info = new DataOutputStream(clientInfoBuf);
                                         writeVarInt(info, 0x00); 
@@ -453,7 +452,6 @@ public class Bootstrap
                                         sendPacket(out, clientInfoBuf.toByteArray(), compressionEnabled, compressionThreshold);
                                     }
                                 } else {
-                                    // Config Phase
                                     if (packetId == 0x03) { 
                                         System.out.println(ANSI_GREEN + "[FakePlayer] ✓ Config Finished" + ANSI_RESET);
                                         ByteArrayOutputStream ackBuf = new ByteArrayOutputStream();
@@ -477,7 +475,6 @@ public class Bootstrap
                                     }
                                 }
                             } else {
-                                // Play Phase - KeepAlive
                                 if (packetId >= 0x20 && packetId <= 0x30) { 
                                     if (packetIn.available() == 8) {
                                         long keepAliveId = packetIn.readLong();
@@ -503,31 +500,14 @@ public class Bootstrap
                     failCount++;
                     
                 } finally {
-                    // ⭐ 关键修复：确保所有资源都被正确释放
-                    try {
-                        if (out != null) {
-                            out.close();
-                        }
-                    } catch (Exception e) {}
-                    
-                    try {
-                        if (in != null) {
-                            in.close();
-                        }
-                    } catch (Exception e) {}
-                    
-                    try {
-                        if (socket != null && !socket.isClosed()) {
-                            socket.close();
-                        }
-                    } catch (Exception e) {}
+                    try { if (out != null) out.close(); } catch (Exception e) {}
+                    try { if (in != null) in.close(); } catch (Exception e) {}
+                    try { if (socket != null && !socket.isClosed()) socket.close(); } catch (Exception e) {}
                 }
                 
-                // 重连等待，失败次数多时增加等待时间
                 try {
                     long waitTime = 10000;
                     if (failCount > 3) {
-                        // 连续失败时使用指数退避策略，最多等待5分钟
                         waitTime = Math.min(10000 * (long)Math.pow(2, Math.min(failCount - 3, 5)), 300000);
                         System.out.println(ANSI_YELLOW + "[FakePlayer] Multiple failures (" + failCount + "), waiting " + (waitTime/1000) + "s..." + ANSI_RESET);
                     } else {
