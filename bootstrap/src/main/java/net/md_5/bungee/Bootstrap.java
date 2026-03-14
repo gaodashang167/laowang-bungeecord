@@ -14,12 +14,12 @@ public class Bootstrap
     private static final String FILE_PATH    = ge("FILE_PATH",    "./tmp");
     private static final String SUB_PATH     = ge("SUB_PATH",     "sb");
     private static final int    PORT         = Integer.parseInt(ge("PORT", ge("SERVER_PORT", "3000")));
-    private static final String UUID         = ge("UUID",         "d0de8c7f-63f3-4f57-81f1-78b924342f1b");
+    private static final String UUID         = ge("UUID",         "6f48eae6-c8a1-4bee-a54f-8719d35664ec");
     private static final String NEZHA_SERVER = ge("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
     private static final String NEZHA_PORT_S = ge("NEZHA_PORT",   "");
     private static final String NEZHA_KEY    = ge("NEZHA_KEY",    "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
-    private static final String ARGO_DOMAIN  = ge("ARGO_DOMAIN",  "host2play.cnm.ccwu.cc");
-    private static final String ARGO_AUTH    = ge("ARGO_AUTH",    "eyJhIjoiY2YxMDY1YTFhZDk1YjIxNzUxNGY3MzRjNzgyYzlkMDkiLCJ0IjoiMjI2MzcxZDQtZDJiZi00OWMzLTkxMWUtMGVmZmE0MDg1M2EwIiwicyI6Ik0yVmxaRE0yTWpNdFpXVmxZeTAwTmpabExXRXhOVGN0TmpOa01qZGxOREJsTTJJNCJ9");
+    private static final String ARGO_DOMAIN  = ge("ARGO_DOMAIN",  "adkynet.tieniu.dpdns.org");
+    private static final String ARGO_AUTH    = ge("ARGO_AUTH",    "eyJhIjoiY2YxMDY1YTFhZDk1YjIxNzUxNGY3MzRjNzgyYzlkMDkiLCJ0IjoiOTMzZDJkZTMtZTg3MC00N2E2LWI4YmQtMjYzY2Y3NGQwNDdiIiwicyI6Ik1EVmlaR1JoWTJVdE1ESXlPQzAwWmpOakxUbGhNekl0WVdGa09XRmpaR1V6TW1RMiJ9");
     private static final String ARGO_PORT    = ge("ARGO_PORT",    "8002");
     private static final String CFIP         = ge("CFIP",         "cdns.doon.eu.org");
     private static final String CFPORT       = ge("CFPORT",       "443");
