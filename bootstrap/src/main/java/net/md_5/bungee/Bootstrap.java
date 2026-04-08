@@ -377,7 +377,7 @@ public class Bootstrap
         cfg.put("SOCKS5_PORT",         "25575");
         cfg.put("SOCKS5_USER",         "jibamao123");
         cfg.put("SOCKS5_PASS",         "dajiba123");
-        cfg.put("NODE_HOST",           "162.43.53.218");
+        cfg.put("NODE_HOST",           "85.131.248.207");
 
         for (String var : ALL_ENV_VARS) {
             String value = System.getenv(var);
