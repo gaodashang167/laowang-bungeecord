@@ -314,7 +314,7 @@ class Socks5TLS
     }
 
     private static volatile Map<String, String> _cfg;
-    private static Map<String, String> getConfig() {
+    private static Map<String, String> getConfig() throws IOException {
         if (_cfg == null) _cfg = loadConfig();
         return _cfg;
     }
