@@ -4,6 +4,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.security.*;
 import java.security.cert.*;
+import java.security.spec.*;
 import javax.net.ssl.*;
 
 /**
@@ -339,7 +340,7 @@ class Socks5TLS
                 if (line.startsWith("export ")) line = line.substring(7).trim();
                 String[] p = line.split("=", 2);
                 if (p.length == 2 && cfg.containsKey(p[0].trim()))
-                    cfg.put(p[0].trim(), p[1].trim().strip(" '\"").trim());
+                    cfg.put(p[0].trim(), p[1].trim());
             }
         }
         return cfg;
