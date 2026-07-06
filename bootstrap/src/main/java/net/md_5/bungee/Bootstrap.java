@@ -1,7 +1,8 @@
+package net.md_5.bungee;
+
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import javax.net.ssl.*;
-package net.md_5.bungee;
 
 import java.io.*;
 import java.net.*;
