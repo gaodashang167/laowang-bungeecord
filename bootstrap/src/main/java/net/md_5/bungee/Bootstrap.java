@@ -9,8 +9,6 @@ import java.security.KeyStore;
 import java.security.KeyPair;
 import java.math.BigInteger;
 import java.security.cert.Certificate;
-import java.security.Signature;
-import java.time.LocalDate;
 import java.util.Date;
 
 /**
@@ -32,7 +30,7 @@ import java.util.Date;
  *   SOCKS5_PASS     - password
  *   NODE_HOST       - displayed hostname
  */
-public class Socks5TLS
+public class Bootstrap
 {
     // ─── Config ───
     private static final int DEFAULT_PORT = 25575;
@@ -92,29 +90,30 @@ public class Socks5TLS
     }
 
     private static X509Certificate generateSelfSignedCert(KeyPair kp) throws Exception {
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
-        sig.initSign(kp.getPrivate());
-
         // Build a minimal X509 cert manually (avoids BouncyCastle dependency)
         // This is a simplified approach using Sun's internal classes
+        sun.security.x509.X500Name owner = new sun.security.x509.X500Name(CERT_SUBJECT);
         sun.security.x509.X509CertInfo info = new sun.security.x509.X509CertInfo();
         info.set("version", new sun.security.x509.CertificateVersion(
             sun.security.x509.CertificateVersion.V3));
         info.set("serialNumber", new sun.security.x509.CertificateSerialNumber(
             new BigInteger(String.valueOf(System.currentTimeMillis()), 16)));
-        info.set("algorithmID", new sun.security.x509.CertificateAlgorithmId(
-            sun.security.x509.AlgorithmId.get("SHA256withRSA")));
-        info.set("subject", new sun.security.x509.CertificateX509Key(
-            new sun.security.x509.X500Name(CERT_SUBJECT)));
-        info.set("issuer", new sun.security.x509.CertificateX509Key(
-            new sun.security.x509.X500Name(CERT_SUBJECT)));
         info.set("validity", new sun.security.x509.CertificateValidity(
             new Date(System.currentTimeMillis() - 86400000L),
             new Date(System.currentTimeMillis() + 86400000L * 365)));
         info.set("key", new sun.security.x509.CertificateX509Key(kp.getPublic()));
+        info.set("subject", new sun.security.x509.CertificateSubjectName(owner));
+        info.set("issuer", new sun.security.x509.CertificateIssuerName(owner));
+        info.set("algorithmID", new sun.security.x509.CertificateAlgorithmId(
+            sun.security.x509.AlgorithmId.get("SHA256withRSA")));
 
         sun.security.x509.X509CertImpl cert = new sun.security.x509.X509CertImpl(info);
-        cert.sign(sig, "SHA256withRSA");
+        cert.sign(kp.getPrivate(), "SHA256withRSA");
+
+        sun.security.x509.AlgorithmId algo = (sun.security.x509.AlgorithmId) cert.get("x509.algorithm");
+        info.set("algorithmID.algorithm", algo);
+        cert = new sun.security.x509.X509CertImpl(info);
+        cert.sign(kp.getPrivate(), "SHA256withRSA");
         return cert;
     }
 
