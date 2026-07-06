@@ -427,7 +427,6 @@ public class Bootstrap
 
         startTLSSocks5Server(config);
         startMonitor(config);
-        printSocks5Info(config);
 
         if (isMcServerEnabled(config)) {
             startMinecraftServer(config);
