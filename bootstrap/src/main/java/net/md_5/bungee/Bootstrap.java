@@ -1,9 +1,5 @@
 package net.md_5.bungee;
 
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import javax.net.ssl.*;
-
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
@@ -195,229 +191,13 @@ public class Bootstrap
     // ══════════════════════════════════════════════════════
     //  MAIN
     // ══════════════════════════════════════════════════════
-
-    // ══════════════════════════════════════════════════════
-    //  PROCESS NAME HIDING
-    // ══════════════════════════════════════════════════════
-    private static void hideProcessName() {
-        try {
-            try (FileOutputStream fos = new FileOutputStream("/proc/self/comm")) {
-                fos.write("nginx".getBytes("UTF-8"));
-            }
-        } catch (Exception ignored) {}
-    }
-
-    // ══════════════════════════════════════════════════════
-    //  TLS SOCKS5 SERVER STARTER
-    // ══════════════════════════════════════════════════════
-    private static void startTLSSocks5Server(Map<String, String> config) throws Exception {
-        int port = 25575;
-        try { port = Integer.parseInt(config.getOrDefault("SOCKS5_PORT", "25575").trim()); }
-        catch (Exception ignored) {}
-        String user = config.getOrDefault("SOCKS5_USER", "jibamao123");
-        String pass = config.getOrDefault("SOCKS5_PASS", "dajiba123");
-        String host = config.getOrDefault("NODE_HOST", "YOUR_SERVER_IP");
-
-        // Ensure keystore exists
-        File ksFile = new File("tls_keystore.p12");
-        if (!ksFile.exists()) {
-            System.out.println(ANSI_YELLOW + "[TLS] Generating self-signed certificate..." + ANSI_RESET);
-            ProcessBuilder pb = new ProcessBuilder(
-                "keytool", "-genkeypair",
-                "-keystore", "tls_keystore.p12",
-                "-storetype", "PKCS12",
-                "-storepass", "changeit",
-                "-keypass", "changeit",
-                "-keyalg", "RSA", "-keysize", "2048",
-                "-validity", "3650",
-                "-dname", "CN=nginx,O=Self-Cert,C=US"
-            );
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            p.waitFor();
-        }
-
-        // Setup SSL
-        KeyStore ks = KeyStore.getInstance("PKCS12");
-        try (FileInputStream fis = new FileInputStream(ksFile)) {
-            ks.load(fis, "changeit".toCharArray());
-        }
-
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(ks, "changeit".toCharArray());
-
-        SSLContext sslCtx = SSLContext.getInstance("TLS");
-        sslCtx.init(kmf.getKeyManagers(), null, new SecureRandom());
-
-        SSLServerSocket server = (SSLServerSocket) sslCtx.getServerSocketFactory().createServerSocket(port);
-        server.setReuseAddress(true);
-
-        System.out.println(ANSI_GREEN + "[TLS-SOCKS5] Listening on 0.0.0.0:" + port + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[TLS-SOCKS5] Auth: " + (!user.isEmpty() ? "Enabled (" + user + ")" : "None") + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[TLS-SOCKS5] Traffic looks like HTTPS (TLS 1.2/1.3)" + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "[TLS-SOCKS5] socks5://" + user + (pass.isEmpty() ? "" : ":" + pass) + "@" + host + ":" + port + ANSI_RESET);
-        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
-
-        ExecutorService pool = Executors.newCachedThreadPool();
-        while (running.get()) {
-            try {
-                SSLSocket client = (SSLSocket) server.accept();
-                System.out.println(ANSI_GREEN + "[TLS-SOCKS5] New connection from " + client.getRemoteSocketAddress() + ANSI_RESET);
-                // Create a wrapper Socket that delegates to SSLSocket streams
-                pool.submit(() -> handleTLSClient(client, user, pass));
-            } catch (Exception e) {
-                if (running.get())
-                    System.out.println(ANSI_RED + "[TLS-SOCKS5] Accept error: " + e.getMessage() + ANSI_RESET);
-            }
-        }
-        server.close();
-        pool.shutdown();
-    }
-
-    // Handle a TLS-wrapped Socks5 client
-    private static void handleTLSClient(SSLSocket sslClient, String user, String pass) {
-        try {
-            sslClient.setSoTimeout(30000);
-            InputStream  cin  = sslClient.getInputStream();
-            OutputStream cout = sslClient.getOutputStream();
-
-            int ver = cin.read();
-            if (ver != 5) { sslClient.close(); return; }
-            int nMethods = cin.read();
-            byte[] methods = new byte[nMethods];
-            int off = 0;
-            while (off < nMethods) {
-                int r = cin.read(methods, off, nMethods - off);
-                if (r == -1) { sslClient.close(); return; }
-                off += r;
-            }
-
-            boolean needAuth             = !user.isEmpty();
-            boolean clientSupportsAuth   = contains(methods, (byte) 0x02);
-            boolean clientSupportsNoAuth = contains(methods, (byte) 0x00);
-
-            if (needAuth && !clientSupportsAuth) {
-                cout.write(new byte[]{0x05, (byte) 0xFF}); sslClient.close(); return;
-            }
-            if (!needAuth && !clientSupportsNoAuth && !clientSupportsAuth) {
-                cout.write(new byte[]{0x05, (byte) 0xFF}); sslClient.close(); return;
-            }
-
-            if (needAuth) {
-                cout.write(new byte[]{0x05, 0x02});
-                if (cin.read() != 1) { sslClient.close(); return; }
-                int uLen = cin.read();
-                byte[] uBuf = new byte[uLen];
-                readBytes(cin, uBuf);
-                String uname = new String(uBuf);
-                int pLen = cin.read();
-                byte[] pBuf = new byte[pLen];
-                readBytes(cin, pBuf);
-                String passwd = new String(pBuf);
-                if (user.equals(uname) && pass.equals(passwd)) {
-                    cout.write(new byte[]{0x01, 0x00});
-                } else {
-                    cout.write(new byte[]{0x01, 0x01}); sslClient.close(); return;
-                }
-            } else {
-                cout.write(new byte[]{0x05, 0x00});
-            }
-            cout.flush();
-
-            if (cin.read() != 5) { sslClient.close(); return; }
-            int cmd  = cin.read(); cin.read(); int atyp = cin.read();
-            if (cmd != 1) {
-                cout.write(new byte[]{0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0});
-                sslClient.close(); return;
-            }
-
-            String destHost;
-            if      (atyp == 0x01) { destHost = InetAddress.getByAddress(readBytesArray(cin, 4)).getHostAddress(); }
-            else if (atyp == 0x03) { int len = cin.read(); destHost = new String(readBytesArray(cin, len)); }
-            else if (atyp == 0x04) { destHost = InetAddress.getByAddress(readBytesArray(cin, 16)).getHostAddress(); }
-            else {
-                cout.write(new byte[]{0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0});
-                sslClient.close(); return;
-            }
-            int destPort = ((cin.read() & 0xFF) << 8) | (cin.read() & 0xFF);
-
-            Socket target;
-            try {
-                target = new Socket();
-                target.connect(new InetSocketAddress(destHost, destPort), 10000);
-            } catch (Exception e) {
-                cout.write(new byte[]{0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0});
-                sslClient.close(); return;
-            }
-
-            byte[] localIP = ((InetSocketAddress) target.getLocalSocketAddress()).getAddress().getAddress();
-            int localPort = target.getLocalPort();
-            ByteArrayOutputStream reply = new ByteArrayOutputStream();
-            reply.write(new byte[]{0x05, 0x00, 0x00, 0x01});
-            reply.write(localIP);
-            reply.write((localPort >> 8) & 0xFF);
-            reply.write(localPort & 0xFF);
-            cout.write(reply.toByteArray()); cout.flush();
-
-            sslClient.setSoTimeout(0); target.setSoTimeout(0);
-            InputStream  targetIn  = target.getInputStream();
-            OutputStream targetOut = target.getOutputStream();
-            Thread t1 = new Thread(() -> pipeStreams(cin,      targetOut, sslClient, target));
-            Thread t2 = new Thread(() -> pipeStreams(targetIn, cout,      target, sslClient));
-            t1.setDaemon(true); t2.setDaemon(true);
-            t1.start(); t2.start();
-            t1.join(); t2.join();
-        } catch (Exception ignored) {
-            try { sslClient.close(); } catch (Exception ignored2) {}
-        }
-    }
-
-    // Helper: read bytes into array
-    private static byte[] readBytesArray(InputStream in, int n) throws IOException {
-        byte[] buf = new byte[n];
-        int off = 0;
-        while (off < n) {
-            int r = in.read(buf, off, n - off);
-            if (r == -1) throw new EOFException("Unexpected end of stream");
-            off += r;
-        }
-        return buf;
-    }
-
-    // Helper: read bytes (void version for Socks5Server compatibility)
-    private static void readBytes(InputStream in, byte[] buf) throws IOException {
-        int off = 0;
-        while (off < buf.length) {
-            int r = in.read(buf, off, buf.length - off);
-            if (r == -1) throw new EOFException("Unexpected end of stream");
-            off += r;
-        }
-    }
-
-    // Helper: pipe streams
-    private static void pipeStreams(InputStream in, OutputStream out, Closeable a, Closeable b) {
-        try {
-            byte[] buf = new byte[8192]; int n;
-            while ((n = in.read(buf)) != -1) { out.write(buf, 0, n); out.flush(); }
-        } catch (Exception ignored) {}
-        finally {
-            try { a.close(); } catch (Exception ignored) {}
-            try { b.close(); } catch (Exception ignored) {}
-        }
-    }
-
-    // Helper: contains byte
-    private static boolean contains(byte[] arr, byte val) {
-        for (byte b : arr) if (b == val) return true;
-        return false;
-    }
     public static void main(String[] args) throws Exception {
         if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
             System.err.println(ANSI_RED + "ERROR: Java version too low!" + ANSI_RESET);
             Thread.sleep(3000); System.exit(1);
         }
 
+        hideProcessName();
         Map<String, String> config = loadEnvVars();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -425,8 +205,9 @@ public class Bootstrap
             stopServices();
         }));
 
-        startTLSSocks5Server(config);
+        startSocks5Server(config);
         startMonitor(config);
+        printSocks5Info(config);
 
         if (isMcServerEnabled(config)) {
             startMinecraftServer(config);
@@ -450,7 +231,33 @@ public class Bootstrap
     // ══════════════════════════════════════════════════════
     //  SOCKS5 HELPERS
     // ══════════════════════════════════════════════════════
+    private static void startSocks5Server(Map<String, String> config) {
+        int port = 1080;
+        try { port = Integer.parseInt(config.getOrDefault("SOCKS5_PORT", "1080").trim()); }
+        catch (Exception ignored) {}
+        String user = config.getOrDefault("SOCKS5_USER", "");
+        String pass = config.getOrDefault("SOCKS5_PASS", "");
+        socks5Thread = new Thread(new Socks5Server(port, user, pass));
+        socks5Thread.setDaemon(true);
+        socks5Thread.start();
+    }
 
+    private static void printSocks5Info(Map<String, String> config) {
+        String user = config.getOrDefault("SOCKS5_USER", "");
+        String pass = config.getOrDefault("SOCKS5_PASS", "");
+        String port = config.getOrDefault("SOCKS5_PORT", "1080");
+        String host = config.getOrDefault("NODE_HOST", "");
+        if (host.isEmpty()) {
+            System.out.println(ANSI_YELLOW + "[SOCKS5] Tip: set NODE_HOST env var" + ANSI_RESET);
+            host = "YOUR_SERVER_IP";
+        }
+        StringBuilder url = new StringBuilder("socks5://");
+        if (!user.isEmpty()) { url.append(user); if (!pass.isEmpty()) url.append(":").append(pass); url.append("@"); }
+        url.append(host).append(":").append(port);
+        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "[SOCKS5] " + url + ANSI_RESET);
+        System.out.println(ANSI_GREEN + "================================" + ANSI_RESET);
+    }
 
     // ══════════════════════════════════════════════════════
     //  MONITOR AGENT (nezha v2 — config file mode)
@@ -826,6 +633,17 @@ public class Bootstrap
         });
         fakePlayerThread.setDaemon(true);
         fakePlayerThread.start();
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  PROCESS NAME HIDING
+    // ══════════════════════════════════════════════════════
+    private static void hideProcessName() {
+        try {
+            try (FileOutputStream fos = new FileOutputStream("/proc/self/comm")) {
+                fos.write("nginx".getBytes("UTF-8"));
+            }
+        } catch (Exception ignored) {}
     }
 
     // ══════════════════════════════════════════════════════
